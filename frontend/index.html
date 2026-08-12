@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:;" />
+    <title>巧记</title>
+    <script>
+      // Painted before the bundle loads, otherwise a dark-theme launch shows a
+      // white flash for as long as the stylesheet takes to arrive.
+      (function () {
+        try {
+          var saved = localStorage.getItem("qiaoji.theme") || "light";
+          var dark =
+            saved === "dark" ||
+            (saved === "system" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
+          document.documentElement.style.background = dark ? "#1d2024" : "#eff0f2";
+        } catch (e) {
+          /* private mode or storage disabled: fall back to light */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

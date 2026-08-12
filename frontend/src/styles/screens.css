@@ -1,0 +1,336 @@
+/* Styles for the full-screen and dialog surfaces: welcome, settings, export,
+   tags, trash and about. */
+
+/* ================================================================ fallback screen */
+
+/* Shown only when the library folder is unreachable. A healthy launch goes
+   straight into the app, so this surface exists purely to offer a way out. */
+
+.welcome-screen {
+  display: grid;
+  grid-template-rows: var(--titlebar-h) 1fr;
+  height: 100%;
+  background: var(--bg-app);
+}
+
+.titlebar--bare {
+  border-bottom: 1px solid var(--border-soft);
+}
+
+/* ================================================================ settings */
+
+.settings-modal .modal__body {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Settings is the tallest dialog in the app; the shared 640px ceiling cut its
+   longest tab in half. */
+.settings-modal {
+  max-height: min(88vh, 780px);
+}
+
+.settings__grid {
+  display: grid;
+  grid-template-columns: 168px 1fr;
+  min-height: 460px;
+  height: 100%;
+}
+
+.settings__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-4) var(--sp-3);
+  border-right: 1px solid var(--border-soft);
+  background: var(--bg-sunken);
+}
+
+.settings__panel {
+  padding: var(--sp-5) var(--sp-6) var(--sp-7);
+  min-height: 0;
+  overflow-y: auto;
+  /* The scrollbar stays visible here rather than appearing on hover. A
+     settings pane that silently clips its last row gives the reader no clue
+     there is more below. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+  /* Room for the scrollbar so it never sits on top of the controls. */
+  padding-right: var(--sp-4);
+}
+
+.settings__panel::-webkit-scrollbar {
+  width: 10px;
+}
+
+.settings__panel::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: var(--r-full);
+}
+
+.settings__panel::-webkit-scrollbar-thumb:hover {
+  background-color: var(--fg-faint);
+  background-clip: content-box;
+}
+
+.settings__heading {
+  margin: var(--sp-5) 0 var(--sp-1);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+
+.settings__panel > div > .settings__heading:first-child {
+  margin-top: 0;
+}
+
+.setting-row__range {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.setting-row__value {
+  min-width: 46px;
+  text-align: right;
+  font-size: var(--text-sm);
+  color: var(--fg-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.range {
+  flex: 1;
+  height: 18px;
+  appearance: none;
+  background: none;
+  cursor: default;
+}
+
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--border-strong);
+}
+
+.range::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: var(--r-full);
+  background: var(--bg-elevated);
+  border: 1.5px solid var(--accent);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.range:hover::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+
+.range:active::-webkit-slider-thumb {
+  transform: scale(0.96);
+}
+
+/* ---------------------------------------------------------- stats */
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+.stat-card {
+  padding: var(--sp-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-lg);
+  background: var(--bg-sunken);
+  text-align: center;
+}
+
+.stat-card__value {
+  font-size: 19px;
+  font-weight: 650;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.stat-card__label {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+/* ================================================================ shortcuts */
+
+.shortcuts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.shortcuts__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  height: 30px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: var(--text-base);
+}
+
+.shortcuts__row:hover {
+  background: var(--hover);
+}
+
+/* ================================================================ export */
+
+.export-modal .modal__body {
+  padding: 0;
+}
+
+.export__grid {
+  display: grid;
+  grid-template-columns: 236px 1fr;
+  min-height: 300px;
+}
+
+.export__left {
+  padding: var(--sp-5);
+  border-right: 1px solid var(--border-soft);
+  background: var(--bg-sunken);
+}
+
+.export__right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  padding: var(--sp-5) var(--sp-6);
+}
+
+.export__formats {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--sp-3);
+}
+
+.export__format {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  height: 34px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-md);
+  color: var(--fg-secondary);
+  font-size: var(--text-base);
+  text-align: left;
+  transition: background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.export__format:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.export__format.is-active {
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-weight: 550;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ================================================================ tags & trash */
+
+.tags__list,
+.trash__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 220px;
+}
+
+.trash__list .list-row {
+  align-items: flex-start;
+  padding: var(--sp-3);
+}
+
+.trash__list .note-row__excerpt {
+  margin-top: 2px;
+}
+
+/* ================================================================ about */
+
+.about {
+  padding: var(--sp-6) var(--sp-5) var(--sp-3);
+  text-align: center;
+}
+
+.about__mark {
+  display: block;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto var(--sp-4);
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  /* A soft lift so the near-white plate reads as a card on the light theme. */
+  filter: drop-shadow(0 2px 6px rgba(15, 23, 36, 0.14));
+}
+
+.about__name {
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.about__version {
+  margin-top: 2px;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.about__tagline {
+  margin-top: var(--sp-2);
+  color: var(--fg-secondary);
+  font-size: var(--text-sm);
+  letter-spacing: 0.1em;
+}
+
+.about__divider {
+  height: 1px;
+  margin: var(--sp-5) auto;
+  width: 64px;
+  background: var(--border);
+}
+
+.about__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  line-height: 1.7;
+}
+
+.about__copyright {
+  margin-top: var(--sp-5);
+  color: var(--fg-faint);
+  font-size: var(--text-xs);
+}
+
+/* ================================================================ confirm */
+
+.confirm__message {
+  color: var(--fg-secondary);
+  font-size: var(--text-base);
+  line-height: 1.75;
+}

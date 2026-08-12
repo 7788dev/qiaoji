@@ -1,0 +1,315 @@
+/* Stylesheet for exported HTML and PDF. Mirrors the in-app preview typography
+   but is written to stand alone, with print rules for the headless-Edge pass. */
+
+:root {
+  --doc-fg: #1a1f26;
+  --doc-muted: #6b7280;
+  --doc-faint: #9aa1ab;
+  --doc-border: #e6e8eb;
+  --doc-surface: #f7f8fa;
+  --doc-accent: #2a3440;
+  --doc-link: #2563a8;
+  --doc-mark: #fdf1c4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 48px 32px 96px;
+  color: var(--doc-fg);
+  background: #fff;
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei",
+    "Source Han Sans SC", "Noto Sans CJK SC", sans-serif;
+  font-size: 16px;
+  line-height: 1.8;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+.qiaoji-doc {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+/* ------------------------------------------------------------ headings */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 2em 0 0.75em;
+  line-height: 1.35;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+h1 {
+  margin-top: 0;
+  font-size: 2em;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+h2 {
+  font-size: 1.45em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--doc-border);
+}
+h3 {
+  font-size: 1.2em;
+}
+h4 {
+  font-size: 1.05em;
+}
+h5,
+h6 {
+  font-size: 1em;
+  color: var(--doc-muted);
+}
+
+/* ------------------------------------------------------------ text */
+
+p {
+  margin: 0 0 1.15em;
+}
+
+a {
+  color: var(--doc-link);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(37, 99, 168, 0.28);
+}
+
+strong {
+  font-weight: 650;
+}
+
+mark {
+  background: var(--doc-mark);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+hr {
+  height: 1px;
+  margin: 2.4em 0;
+  border: 0;
+  background: var(--doc-border);
+}
+
+blockquote {
+  margin: 1.4em 0;
+  padding: 0.2em 0 0.2em 1.1em;
+  border-left: 3px solid var(--doc-border);
+  color: var(--doc-muted);
+}
+
+blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+/* ------------------------------------------------------------ lists */
+
+ul,
+ol {
+  margin: 0 0 1.15em;
+  padding-left: 1.6em;
+}
+
+li {
+  margin: 0.3em 0;
+}
+
+li > ul,
+li > ol {
+  margin: 0.3em 0;
+}
+
+ul.contains-task-list {
+  list-style: none;
+  padding-left: 0.2em;
+}
+
+.task-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55em;
+}
+
+.task-list-item input[type="checkbox"] {
+  margin-top: 0.45em;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--doc-accent);
+}
+
+.task-list-item.is-done {
+  color: var(--doc-faint);
+  text-decoration: line-through;
+}
+
+/* ------------------------------------------------------------ code */
+
+code {
+  font-family: "Cascadia Mono", Consolas, "SF Mono", "JetBrains Mono", Menlo,
+    monospace;
+  font-size: 0.88em;
+}
+
+:not(pre) > code {
+  padding: 0.15em 0.4em;
+  border-radius: 5px;
+  background: var(--doc-surface);
+  border: 1px solid var(--doc-border);
+  white-space: break-spaces;
+}
+
+pre {
+  margin: 1.4em 0;
+  padding: 16px 18px;
+  overflow-x: auto;
+  border-radius: 10px;
+  background: var(--doc-surface);
+  border: 1px solid var(--doc-border);
+  line-height: 1.65;
+}
+
+pre code {
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+/* ------------------------------------------------------------ tables */
+
+table {
+  width: 100%;
+  margin: 1.4em 0;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+
+th,
+td {
+  padding: 9px 13px;
+  border: 1px solid var(--doc-border);
+  text-align: left;
+}
+
+th {
+  background: var(--doc-surface);
+  font-weight: 620;
+}
+
+/* ------------------------------------------------------------ media */
+
+img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+/* ------------------------------------------------------------ maths */
+
+.katex-display {
+  margin: 1.6em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+/* ------------------------------------------------------------ syntax */
+
+.hljs-comment,
+.hljs-quote {
+  color: #8b949e;
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-type {
+  color: #a4288f;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition {
+  color: #1f7a4d;
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet {
+  color: #b5591b;
+}
+.hljs-title,
+.hljs-section,
+.hljs-name {
+  color: #2f5fd0;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable {
+  color: #7c4fd0;
+}
+.hljs-built_in,
+.hljs-class .hljs-title {
+  color: #b5591b;
+}
+.hljs-meta,
+.hljs-deletion {
+  color: #a8323a;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------ print */
+
+@page {
+  margin: 16mm 14mm 18mm;
+}
+
+@media print {
+  body {
+    padding: 0;
+    font-size: 11.5pt;
+  }
+
+  .qiaoji-doc {
+    max-width: none;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    break-after: avoid-page;
+  }
+
+  pre,
+  blockquote,
+  table,
+  .katex-display {
+    break-inside: avoid;
+  }
+
+  a {
+    border-bottom: 0;
+  }
+
+  img {
+    break-inside: avoid;
+  }
+}
