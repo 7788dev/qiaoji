@@ -53,12 +53,13 @@ jobs:
       - name: Run quality gates
         shell: pwsh
         run: |
-          go vet ./...
-          go test ./...
           Push-Location frontend
           npx tsc --noEmit
           npm test
+          npm run build
           Pop-Location
+          go vet ./...
+          go test ./...
 
       - name: Install Wails and NSIS
         shell: pwsh
