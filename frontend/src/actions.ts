@@ -444,6 +444,32 @@ export function markDirty(content: string): void {
   scheduleSave(tab.id, state.settings.autoSaveDelayMs);
 }
 
+/** Replaces an async image-upload placeholder in the tab it belongs to. */
+export function replaceUploadPlaceholder(
+  id: string,
+  placeholder: string,
+  replacement: string,
+): boolean {
+  const tab = state.tabs.find((entry) => entry.id === id);
+  if (!tab) return false;
+  const at = tab.content.indexOf(placeholder);
+  if (at < 0) return false; // the user deleted or undid the placeholder
+  const content =
+    tab.content.slice(0, at) + replacement + tab.content.slice(at + placeholder.length);
+
+  if (id === state.activeTabId && editor) {
+    editor.syncDoc(content);
+    return true;
+  }
+
+  tab.content = content;
+  setState({ tabs: state.tabs.slice() });
+  if (state.settings.autoSave && !tab.conflict) {
+    scheduleSave(id, state.settings.autoSaveDelayMs);
+  }
+  return true;
+}
+
 export async function saveTab(
   id: string,
   options: { silent?: boolean; force?: boolean } = {},

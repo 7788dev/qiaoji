@@ -14,6 +14,10 @@ export function CancelClose() {
   return window['go']['main']['App']['CancelClose']();
 }
 
+export function CheckForUpdates() {
+  return window['go']['main']['App']['CheckForUpdates']();
+}
+
 export function ConfirmClose() {
   return window['go']['main']['App']['ConfirmClose']();
 }
@@ -120,6 +124,10 @@ export function RestoreNote(arg1) {
 
 export function RevealInExplorer(arg1) {
   return window['go']['main']['App']['RevealInExplorer'](arg1);
+}
+
+export function SaveAsset(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveAsset'](arg1, arg2, arg3);
 }
 
 export function SaveNote(arg1, arg2, arg3, arg4) {

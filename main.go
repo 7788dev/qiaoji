@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"net/http"
 	"os"
 	"time"
 
@@ -48,7 +49,10 @@ func main() {
 			UniqueId:               "qiaoji-8f2a4c1e",
 			OnSecondInstanceLaunch: app.onSecondInstance,
 		},
-		AssetServer: &assetserver.Options{Assets: assets},
+		AssetServer: &assetserver.Options{
+			Assets:  assets,
+			Handler: http.HandlerFunc(app.serveVaultAsset),
+		},
 		Windows: &windows.Options{
 			// Keep the Aero shadow and Windows 11 rounded corners on the
 			// frameless window; without them it reads as a floating rectangle.

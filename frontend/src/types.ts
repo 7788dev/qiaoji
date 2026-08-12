@@ -137,6 +137,13 @@ export interface BootstrapPayload {
   stats: Stats;
 }
 
+export interface UpdateInfo {
+  currentVersion: string;
+  latestVersion: string;
+  available: boolean;
+  releaseUrl: string;
+}
+
 export interface ExportRequest {
   format: ExportFormat;
   title: string;

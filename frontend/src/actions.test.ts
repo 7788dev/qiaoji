@@ -208,6 +208,42 @@ describe("closing tabs", () => {
   });
 });
 
+describe("image upload placeholders", () => {
+  it("finishes an upload in the tab where it started after switching tabs", () => {
+    const placeholder = "![正在保存截图…](qiaoji-upload-1)";
+    const first = makeTab("a", `before\n${placeholder}\nafter`);
+    state.tabs = [first, makeTab("b", "B")];
+    state.activeTabId = "b";
+    state.settings = { ...state.settings, autoSave: false };
+
+    expect(
+      actions.replaceUploadPlaceholder(
+        first.id,
+        placeholder,
+        "![截图](<assets/screenshot.png>)",
+      ),
+    ).toBe(true);
+    expect(first.content).toContain("![截图](<assets/screenshot.png>)");
+    expect(first.content).not.toContain("qiaoji-upload-1");
+    expect(state.tabs[1].content).toBe("B");
+  });
+
+  it("does not reinsert an image after the user deletes its placeholder", () => {
+    const tab = makeTab("a", "placeholder was removed");
+    state.tabs = [tab];
+    state.activeTabId = "b";
+
+    expect(
+      actions.replaceUploadPlaceholder(
+        tab.id,
+        "![uploading](qiaoji-upload-1)",
+        "![image](<assets/image.png>)",
+      ),
+    ).toBe(false);
+    expect(tab.content).toBe("placeholder was removed");
+  });
+});
+
 describe("external edit conflicts", () => {
   it("keeps the local buffer and suspends autosave when the backend rejects a stale revision", async () => {
     const tab = makeTab("a", "A");

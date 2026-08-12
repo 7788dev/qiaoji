@@ -556,6 +556,12 @@ func (v *Vault) Folders() ([]Folder, error) {
 	sort.Strings(order)
 	out := make([]Folder, 0, len(order))
 	for _, key := range order {
+		// Image-only attachment directories are implementation detail, not
+		// empty notebooks. If somebody intentionally puts Markdown files in an
+		// assets directory it has a non-zero count and remains visible.
+		if pathLeaf(key) == "assets" && counts[key] == 0 {
+			continue
+		}
 		out = append(out, Folder{Name: pathLeaf(key), Path: key, Count: counts[key]})
 	}
 	return out, nil

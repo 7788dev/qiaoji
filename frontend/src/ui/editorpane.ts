@@ -72,6 +72,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
       },
       onCursor: handlers.onCursor,
       onSave: () => void actions.saveActive(),
+      onImages: (files, from, to) => insertImages(files, from, to),
       onScroll: (top) => {
         const tab = activeTab();
         if (tab) tab.scrollTop = top;
@@ -82,6 +83,61 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
 
   const unregisterEditor = actions.registerEditor(editor);
   const removeContextMenu = installContextMenu(editor);
+
+  function insertImages(files: File[], from: number, to: number): void {
+    const tab = activeTab();
+    if (!tab) return;
+
+    const entries = files.map((file, index) => {
+      const id =
+        globalThis.crypto?.randomUUID?.() ??
+        `${Date.now().toString(36)}-${index}-${Math.random().toString(36).slice(2)}`;
+      const alt =
+        file.name.replace(/\.[^.]+$/, "").replace(/[[\]\\]/g, "").trim() || "图片";
+      return {
+        file,
+        alt,
+        placeholder: `![正在保存 ${alt}…](qiaoji-upload-${id})`,
+      };
+    });
+
+    const before = editor.doc.slice(0, from);
+    const after = editor.doc.slice(to);
+    const prefix = before && !before.endsWith("\n") ? "\n\n" : "";
+    const suffix = after && !after.startsWith("\n") ? "\n\n" : "";
+    editor.replaceRange(
+      from,
+      to,
+      prefix + entries.map((entry) => entry.placeholder).join("\n") + suffix,
+    );
+
+    for (const entry of entries) {
+      void (async () => {
+        try {
+          const bytes = Array.from(new Uint8Array(await entry.file.arrayBuffer()));
+          const current = state.tabs.find((candidate) => candidate.id === tab.id);
+          if (!current) return;
+          const relative = await api.saveAsset(
+            current.path,
+            entry.file.name || `${entry.alt}.png`,
+            bytes,
+          );
+          actions.replaceUploadPlaceholder(
+            tab.id,
+            entry.placeholder,
+            `![${entry.alt}](<${relative}>)`,
+          );
+        } catch (err) {
+          actions.replaceUploadPlaceholder(
+            tab.id,
+            entry.placeholder,
+            `**图片保存失败：${entry.alt}**`,
+          );
+          reportError("保存图片", err);
+        }
+      })();
+    }
+  }
 
   /**
    * Picks up maths or code typed into a note that previously had neither.
@@ -213,7 +269,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     if (!tab) return;
     const source = editor.doc;
 
-    previewInner.innerHTML = render(source).html;
+    previewInner.innerHTML = render(source, tab.path).html;
 
     // Maths and highlighting arrive asynchronously the first time they are
     // needed; re-render once they are in so the output is complete. Once both
@@ -221,7 +277,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     if (modulesReadyFor(source)) return;
     await preloadFor(source);
     if (activeTab()?.id !== tab.id) return;
-    previewInner.innerHTML = render(editor.doc).html;
+    previewInner.innerHTML = render(editor.doc, tab.path).html;
   }
 
   // Links inside the preview must not navigate the WebView away from the app.

@@ -314,6 +314,29 @@ const externalLinkPlugin: Plugin = (md) => {
   };
 };
 
+const localImagePlugin: Plugin = (md) => {
+  const base =
+    md.renderer.rules.image ??
+    ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+
+  md.renderer.rules.image = (tokens, idx, options, env, self) => {
+    const src = String(tokens[idx].attrGet("src") ?? "");
+    const notePath = (env as { assetBasePath?: string } | undefined)?.assetBasePath;
+    if (
+      notePath &&
+      src &&
+      !/^[a-z][a-z0-9+.-]*:/i.test(src) &&
+      !src.startsWith("//") &&
+      !src.startsWith("/") &&
+      !src.startsWith("#")
+    ) {
+      const query = new URLSearchParams({ note: notePath, path: src });
+      tokens[idx].attrSet("src", `/__qiaoji_asset?${query.toString()}`);
+    }
+    return base(tokens, idx, options, env, self);
+  };
+};
+
 /** Adds stable ids to headings so the outline and `#anchor` links work. */
 const headingAnchorPlugin: Plugin = (md) => {
   md.core.ruler.push("heading_anchor", (state) => {
@@ -379,7 +402,12 @@ const md = new MarkdownIt({
   },
 });
 
-md.use(mathPlugin).use(taskListPlugin).use(externalLinkPlugin).use(headingAnchorPlugin);
+md
+  .use(mathPlugin)
+  .use(taskListPlugin)
+  .use(externalLinkPlugin)
+  .use(localImagePlugin)
+  .use(headingAnchorPlugin);
 
 // A bare <br> is the one raw tag worth honouring; everything else stays literal.
 md.renderer.rules.html_inline = (tokens, idx) => {
@@ -396,9 +424,9 @@ md.renderer.rules.table_open = () => '<div class="md-table-wrap"><table>\n';
 md.renderer.rules.table_close = () => "</table></div>\n";
 
 /** Renders Markdown to HTML using whichever optional modules are loaded. */
-export function render(source: string): RenderResult {
+export function render(source: string, assetBasePath?: string): RenderResult {
   return {
-    html: md.render(source),
+    html: md.render(source, { assetBasePath }),
     hasMath: detectMath(source),
     hasCode: detectCode(source),
   };

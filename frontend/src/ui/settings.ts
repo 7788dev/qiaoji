@@ -174,6 +174,9 @@ export function openSettings(deps: SettingsDeps, initial: SectionId = "general")
       toggle("关闭时最小化到托盘", "点击关闭按钮时保持后台运行", s.closeToTray, (v) =>
         update({ closeToTray: v }),
       ),
+      toggle("自动检查更新", "启动时检查 GitHub Releases，不会自动下载安装", s.autoUpdate, (v) =>
+        update({ autoUpdate: v }),
+      ),
       toggle(
         "硬件加速",
         "关闭后改用软件渲染。只有在界面出现黑块或文字撕裂时才需要关闭，重启后生效。",
@@ -646,6 +649,60 @@ export function openShortcuts(): void {
 /* ---------------------------------------------------------------- about */
 
 export function openAbout(): void {
+  const updateStatus = el(
+    "div",
+    { class: "about__update-status" },
+    state.settings.autoUpdate ? "已开启启动时自动检查更新" : "启动时自动检查更新已关闭",
+  );
+  let releaseUrl = "";
+  const releaseButton = el(
+    "button",
+    {
+      class: "btn btn--primary",
+      type: "button",
+      hidden: true,
+      onclick: () => {
+        if (releaseUrl) {
+          void api.openExternal(releaseUrl).catch((err) => reportError("打开更新页面", err));
+        }
+      },
+    },
+    "打开下载页",
+  );
+  const checkButton = el(
+    "button",
+    {
+      class: "btn",
+      type: "button",
+      onclick: async () => {
+        checkButton.disabled = true;
+        checkButton.replaceChildren(el("span", { class: "spinner" }), "检查中…");
+        updateStatus.textContent = "正在连接 GitHub Releases…";
+        releaseButton.hidden = true;
+        try {
+          const info = await api.checkForUpdates();
+          releaseUrl = info.releaseUrl;
+          if (info.available) {
+            updateStatus.textContent = `发现新版本 ${info.latestVersion}`;
+            releaseButton.hidden = false;
+          } else if (info.currentVersion === "dev") {
+            updateStatus.textContent = `当前是开发版本，最新发布版为 ${info.latestVersion}`;
+          } else {
+            updateStatus.textContent = `已是最新版本（${info.currentVersion}）`;
+          }
+        } catch (err) {
+          updateStatus.textContent = "检查失败，请稍后重试";
+          reportError("检查更新", err);
+        } finally {
+          checkButton.disabled = false;
+          checkButton.replaceChildren(icon("refresh", 14), "重新检查");
+        }
+      },
+    },
+    icon("refresh", 14),
+    "检查更新",
+  );
+
   openModal({
     width: 380,
     showCloseButton: true,
@@ -662,6 +719,12 @@ export function openAbout(): void {
         { class: "about__meta" },
         el("div", null, `本地笔记 ${state.stats.notes} 篇 · ${fileSize(state.stats.bytes)}`),
         el("div", null, "所有笔记都是本地 Markdown 文件"),
+      ),
+      el(
+        "div",
+        { class: "about__update" },
+        updateStatus,
+        el("div", { class: "about__update-actions" }, checkButton, releaseButton),
       ),
       el("div", { class: "about__copyright" }, "© 2026 巧记"),
     ),

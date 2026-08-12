@@ -72,6 +72,16 @@ describe("render", () => {
     expect(html).toContain("&lt;img");
   });
 
+  it("routes relative note images through the validated vault asset endpoint", () => {
+    const html = render("![截图](assets/screenshot.png)", "C:\\vault\\note.md").html;
+    expect(html).toContain("/__qiaoji_asset?");
+    expect(html).toContain("note=C%3A%5Cvault%5Cnote.md");
+    expect(html).toContain("path=assets%2Fscreenshot.png");
+
+    const external = render("![](https://example.com/image.png)", "C:\\vault\\note.md").html;
+    expect(external).toContain('src="https://example.com/image.png"');
+  });
+
   it("handles a document full of dollar signs without going quadratic", () => {
     const source = "价格 $1 $2 $3 $4 $5 ".repeat(4000);
     const started = performance.now();

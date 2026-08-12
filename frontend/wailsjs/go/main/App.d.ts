@@ -12,6 +12,8 @@ export function Bootstrap():Promise<main.Bootstrap>;
 
 export function CancelClose():Promise<void>;
 
+export function CheckForUpdates():Promise<main.UpdateInfo>;
+
 export function ConfirmClose():Promise<void>;
 
 export function CreateFolder(arg1:string):Promise<store.Folder>;
@@ -65,6 +67,8 @@ export function RequestQuit():Promise<void>;
 export function RestoreNote(arg1:string):Promise<store.Restored>;
 
 export function RevealInExplorer(arg1:string):Promise<void>;
+
+export function SaveAsset(arg1:string,arg2:string,arg3:Array<number>):Promise<string>;
 
 export function SaveNote(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<store.Meta>;
 

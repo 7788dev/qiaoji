@@ -530,6 +530,16 @@ func (a *App) SaveNote(path, content, expectedRevision string, force bool) (stor
 	return n.Meta, nil
 }
 
+func (a *App) SaveAsset(notePath, filename string, data []byte) (string, error) {
+	v, _, done, err := a.need()
+	if err != nil {
+		return "", err
+	}
+	defer done()
+	a.touch()
+	return v.SaveAsset(notePath, filename, data)
+}
+
 func (a *App) RenameNote(path, title string) (store.Meta, error) {
 	v, ix, done, err := a.need()
 	if err != nil {

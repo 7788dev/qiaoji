@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -181,6 +182,39 @@ func TestSaveDoesNotClobberSiblingTmpFile(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("atomic-write temporary files were not cleaned up: %v", matches)
+	}
+}
+
+func TestSaveAssetCreatesSafeNoteRelativeImage(t *testing.T) {
+	v := newVault(t)
+	n, err := v.Create("项目", "含图片", "# 含图片\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}
+
+	relative, err := v.SaveAsset(n.Path, `..\截图?.png`, png)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(relative, "assets/") || !strings.HasSuffix(relative, ".png") {
+		t.Fatalf("relative asset path = %q", relative)
+	}
+	resolved, err := v.ResolveAsset(n.Path, relative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(resolved, filepath.Join(v.Root(), "项目", "assets")+string(filepath.Separator)) {
+		t.Fatalf("asset escaped its note folder: %q", resolved)
+	}
+	if data, err := os.ReadFile(resolved); err != nil || !bytes.Equal(data, png) {
+		t.Fatalf("saved asset = %v, %v", data, err)
+	}
+
+	for _, bad := range []string{"../含图片.md", "../../outside.png", "/absolute.png"} {
+		if _, err := v.ResolveAsset(n.Path, bad); !errors.Is(err, ErrNotFound) {
+			t.Errorf("ResolveAsset(%q) error = %v, want ErrNotFound", bad, err)
+		}
 	}
 }
 

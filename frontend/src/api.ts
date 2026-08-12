@@ -22,6 +22,7 @@ import type {
   Stats,
   Tag,
   TrashItem,
+  UpdateInfo,
 } from "./types";
 
 /**
@@ -80,6 +81,9 @@ export const saveNote = (
     () => Go.SaveNote(path, content, expectedRevision, force),
     "保存笔记",
   ) as Promise<NoteMeta>;
+
+export const saveAsset = (notePath: string, filename: string, data: number[]) =>
+  call(() => Go.SaveAsset(notePath, filename, data), "保存图片");
 
 export const renameNote = (path: string, title: string) =>
   call(() => Go.RenameNote(path, title), "重命名笔记") as Promise<NoteMeta>;
@@ -145,6 +149,9 @@ export const saveSettings = (next: Settings) =>
   call(() => Go.SaveSettings(next as never), "保存设置") as Promise<Settings>;
 
 export const applyTheme = (theme: string) => Go.ApplyTheme(theme);
+
+export const checkForUpdates = () =>
+  call(() => Go.CheckForUpdates(), "检查更新") as Promise<UpdateInfo>;
 
 /* ---------------------------------------------------------------- export */
 

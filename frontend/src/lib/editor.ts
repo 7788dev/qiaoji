@@ -53,6 +53,7 @@ export interface EditorOptions {
   onCursor: (line: number, column: number, selected: number) => void;
   onSave: () => void;
   onScroll?: (top: number) => void;
+  onImages?: (files: File[], from: number, to: number) => void;
 }
 
 export interface EditorSettings {
@@ -711,6 +712,28 @@ export class MarkdownEditor {
         }
       }),
       EditorView.domEventHandlers({
+        paste: (event, view) => {
+          const files = Array.from(event.clipboardData?.files ?? []).filter((file) =>
+            file.type.startsWith("image/"),
+          );
+          if (files.length === 0 || !options.onImages) return false;
+          event.preventDefault();
+          const range = view.state.selection.main;
+          options.onImages(files, range.from, range.to);
+          return true;
+        },
+        drop: (event, view) => {
+          const files = Array.from(event.dataTransfer?.files ?? []).filter((file) =>
+            file.type.startsWith("image/"),
+          );
+          if (files.length === 0 || !options.onImages) return false;
+          event.preventDefault();
+          const position =
+            view.posAtCoords({ x: event.clientX, y: event.clientY }) ??
+            view.state.selection.main.head;
+          options.onImages(files, position, position);
+          return true;
+        },
         scroll: (_event, view) => {
           options.onScroll?.(view.scrollDOM.scrollTop);
         },
@@ -834,6 +857,19 @@ export class MarkdownEditor {
       this.view.state.update({
         changes: { from: range.from, to: range.to, insert: text },
         selection: EditorSelection.cursor(range.from + text.length),
+        userEvent: "input.paste",
+      }),
+    );
+    this.view.focus();
+  }
+
+  replaceRange(from: number, to: number, text: string): void {
+    const start = Math.min(Math.max(0, from), this.view.state.doc.length);
+    const end = Math.min(Math.max(start, to), this.view.state.doc.length);
+    this.view.dispatch(
+      this.view.state.update({
+        changes: { from: start, to: end, insert: text },
+        selection: EditorSelection.cursor(start + text.length),
         userEvent: "input.paste",
       }),
     );

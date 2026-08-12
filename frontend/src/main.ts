@@ -29,6 +29,7 @@ import { notify, reportError } from "./ui/toast";
 
 const root = qs(document, "#app");
 let teardownView: () => void = () => {};
+let updateCheckStarted = false;
 
 // Nothing in a desktop app should fail invisibly. Without this, a rejected
 // promise deep in a lazy import just leaves the UI subtly wrong with no clue
@@ -292,6 +293,32 @@ function adoptPayload(payload: BootstrapPayload): void {
   applyZoom();
 }
 
+function checkUpdatesOnLaunch(): void {
+  if (
+    updateCheckStarted ||
+    !state.settings.autoUpdate ||
+    state.version === "dev"
+  ) {
+    return;
+  }
+  updateCheckStarted = true;
+  void api
+    .checkForUpdates()
+    .then((info) => {
+      if (!info.available) return;
+      notify.info(`巧记 ${info.latestVersion} 已发布`, {
+        duration: 12_000,
+        action: {
+          label: "查看更新",
+          run: () => void api.openExternal(info.releaseUrl).catch((err) => reportError("打开更新页面", err)),
+        },
+      });
+    })
+    // Offline launches should remain quiet. The API facade already records the
+    // failure in the Wails log for diagnosis; manual checks report it onscreen.
+    .catch(() => {});
+}
+
 /**
  * Shown only when the library folder cannot be opened at all, for example
  * because it lives on a drive that is currently disconnected. There is no
@@ -393,6 +420,7 @@ async function enterApp(payload: BootstrapPayload): Promise<void> {
   if (first) await actions.openNote(first, { focus: false });
 
   if (payload.error) notify.error(payload.error);
+  checkUpdatesOnLaunch();
 }
 
 void start();
