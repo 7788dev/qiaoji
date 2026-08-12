@@ -1,4 +1,4 @@
-Unicode true
+﻿Unicode true
 
 ####
 ## Please note: Template replacements don't work in this file. They are provided with default defines like
@@ -29,6 +29,20 @@ Unicode true
 ## !define UNINST_KEY_NAME     "UninstKeyInRegistry"  # Default "${INFO_COMPANYNAME}${INFO_PRODUCTNAME}"
 ####
 ## !define REQUEST_EXECUTION_LEVEL "admin"            # Default "admin"  see also https://nsis.sourceforge.io/Docs/Chapter4.html
+####
+
+## A personal notes app installs into the user's own directory; asking for
+## administrator rights to do that buys nothing. `wails build -installscope
+## user` defines this on the command line, and the guard keeps a plain
+## `-nsis` build from silently falling back to the "admin" default. Either
+## way the directory page still lets the user install anywhere.
+!ifndef WAILS_INSTALL_SCOPE
+    !define WAILS_INSTALL_SCOPE "user"
+!endif
+!ifndef REQUEST_EXECUTION_LEVEL
+    !define REQUEST_EXECUTION_LEVEL "user"
+!endif
+
 ####
 ## Include the wails tools
 ####
@@ -64,14 +78,21 @@ ManifestDPIAware true
 
 !insertmacro MUI_UNPAGE_INSTFILES # Uinstalling page
 
-!insertmacro MUI_LANGUAGE "English" # Set the Language of the installer
+# The application itself is Simplified Chinese only, so its installer has no
+# reason to speak English. The first entry is the default; English stays as a
+# fallback. SimpChinese needs a Unicode installer, which "Unicode true" at the
+# top of this file already provides.
+!insertmacro MUI_LANGUAGE "SimpChinese"
+!insertmacro MUI_LANGUAGE "English"
 
 ## The following two statements can be used to sign the installer and the uninstaller. The path to the binaries are provided in %1
 #!uninstfinalize 'signtool --file "%1"'
 #!finalize 'signtool --file "%1"'
 
 Name "${INFO_PRODUCTNAME}"
-OutFile "..\..\bin\${INFO_PROJECTNAME}-${ARCH}-installer.exe" # Name of the installer's file.
+OutFile "..\..\bin\Qiaoji-${INFO_PRODUCTVERSION}-windows-${ARCH}-setup.exe"
+!define QIAOJI_INSTANCE_CLASS "wails-app-qiaoji-8f2a4c1e-sic"
+!define QIAOJI_INSTANCE_WINDOW "wails-app-qiaoji-8f2a4c1e-siw"
 !ifdef WAILS_INSTALL_SCOPE
   !if "${WAILS_INSTALL_SCOPE}" == "user"
     InstallDir "$LOCALAPPDATA\Programs\${INFO_PRODUCTNAME}"
@@ -84,7 +105,24 @@ OutFile "..\..\bin\${INFO_PROJECTNAME}-${ARCH}-installer.exe" # Name of the inst
 ShowInstDetails show # This will always show the installation details.
 
 Function .onInit
+check_running:
+   # Wails creates this message-only window for the single-instance lock.
+   # Unlike the visible title it stays stable while a note title is shown.
+   FindWindow $0 "${QIAOJI_INSTANCE_CLASS}" "${QIAOJI_INSTANCE_WINDOW}"
+   StrCmp $0 0 app_not_running
+   MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "巧记正在运行。请从系统托盘退出巧记，然后点击“重试”。" IDRETRY check_running
+   Abort
+app_not_running:
    !insertmacro wails.checkArchitecture
+FunctionEnd
+
+Function un.onInit
+check_running:
+   FindWindow $0 "${QIAOJI_INSTANCE_CLASS}" "${QIAOJI_INSTANCE_WINDOW}"
+   StrCmp $0 0 app_not_running
+   MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "巧记正在运行。请从系统托盘退出巧记，然后点击“重试”。" IDRETRY check_running
+   Abort
+app_not_running:
 FunctionEnd
 
 Section
@@ -108,7 +146,19 @@ SectionEnd
 Section "uninstall"
     !insertmacro wails.setShellContext
 
-    RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
+    # The app's own state: settings.json and the WebView2 profile, which Go
+    # puts in %APPDATA%\<product> via config.Dir(). This line used to remove
+    # "$AppData\<product>.exe", a path that never exists, so every uninstall
+    # left the settings and the browser cache behind.
+    #
+    # The notes live in %USERPROFILE%\Documents\<product>. They belong to the
+    # user, and an uninstall must never touch them.
+    RMDir /r "$APPDATA\${INFO_PRODUCTNAME}"
+
+    # The "start with Windows" switch writes an HKCU Run entry named after
+    # config.AppName. Left behind, it points at an executable that is no longer
+    # there and fails on every boot.
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${INFO_PRODUCTNAME}"
 
     RMDir /r $INSTDIR
 

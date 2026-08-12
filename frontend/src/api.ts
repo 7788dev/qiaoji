@@ -70,8 +70,16 @@ export const getNote = (path: string, id = "") =>
 export const createNote = (folder: string, title = "") =>
   call(() => Go.CreateNote(folder, title), "新建笔记") as Promise<Note>;
 
-export const saveNote = (path: string, content: string) =>
-  call(() => Go.SaveNote(path, content), "保存笔记") as Promise<NoteMeta>;
+export const saveNote = (
+  path: string,
+  content: string,
+  expectedRevision: string,
+  force = false,
+) =>
+  call(
+    () => Go.SaveNote(path, content, expectedRevision, force),
+    "保存笔记",
+  ) as Promise<NoteMeta>;
 
 export const renameNote = (path: string, title: string) =>
   call(() => Go.RenameNote(path, title), "重命名笔记") as Promise<NoteMeta>;
@@ -180,6 +188,6 @@ export type BackendEvent =
   | "tray:new-note"
   | "app:before-close";
 
-export function onBackend(event: BackendEvent, handler: (data?: unknown) => void): void {
-  EventsOn(event, handler);
+export function onBackend(event: BackendEvent, handler: (data?: unknown) => void): () => void {
+  return EventsOn(event, handler);
 }

@@ -95,7 +95,7 @@ const defaultSettings: Settings = {
 
 export const state: AppState = {
   ready: false,
-  version: "1.0.0",
+  version: "dev",
   vaultPath: "",
   settings: defaultSettings,
   stats: { notes: 0, words: 0, folders: 0, tags: 0, trash: 0, bytes: 0 },

@@ -12,6 +12,8 @@ export interface NoteMeta {
   excerpt: string;
   words: number;
   size: number;
+  /** SHA-256 of the exact file loaded from disk, used for conflict checks. */
+  revision: string;
 }
 
 export interface Note extends NoteMeta {
@@ -159,4 +161,7 @@ export interface Tab {
   scrollTop: number;
   cursor: number;
   mode: "edit" | "preview";
+  revision: string;
+  /** Disk version that arrived while this tab had unsaved edits. */
+  conflict: Note | null;
 }

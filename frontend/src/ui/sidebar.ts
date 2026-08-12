@@ -1,5 +1,11 @@
 import * as actions from "../actions";
-import { el, icon, on } from "../lib/dom";
+import {
+  disposableElement,
+  el,
+  icon,
+  on,
+  type DisposableHTMLElement,
+} from "../lib/dom";
 import { tagColor } from "../lib/format";
 import { state, subscribe } from "../store";
 import type { Scope } from "../types";
@@ -21,7 +27,7 @@ interface NavSpec {
   count?: number;
 }
 
-export function createSidebar(handlers: SidebarHandlers): HTMLElement {
+export function createSidebar(handlers: SidebarHandlers): DisposableHTMLElement {
   const scroll = el("div", { class: "sidebar__scroll scroll" });
 
   const root = el(
@@ -294,10 +300,10 @@ export function createSidebar(handlers: SidebarHandlers): HTMLElement {
     }
   }
 
-  subscribe(["folders", "tags", "stats", "scope", "scopeValue"], paint);
+  const unsubscribe = subscribe(["folders", "tags", "stats", "scope", "scopeValue"], paint);
   paint();
 
-  return root;
+  return disposableElement(root, unsubscribe);
 }
 
 /**

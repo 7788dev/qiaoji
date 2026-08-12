@@ -319,8 +319,13 @@ func (v *Vault) restoreFolder(dir string, item TrashItem) (Restored, error) {
 func (v *Vault) PurgeTrash(entryID string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	dir := filepath.Join(v.trashRoot(), filepath.Base(entryID))
-	if !strings.HasPrefix(dir, v.trashRoot()) {
+	if entryID == "" || entryID == "." || entryID == ".." ||
+		entryID != filepath.Base(entryID) || strings.ContainsAny(entryID, `/\`) {
+		return errors.New("invalid trash entry")
+	}
+	root := filepath.Clean(v.trashRoot())
+	dir := filepath.Clean(filepath.Join(root, entryID))
+	if dir == root || filepath.Dir(dir) != root {
 		return errors.New("invalid trash entry")
 	}
 	return os.RemoveAll(dir)

@@ -1,6 +1,11 @@
 import * as actions from "../actions";
 import * as api from "../api";
-import { el, icon } from "../lib/dom";
+import {
+  disposableElement,
+  el,
+  icon,
+  type DisposableHTMLElement,
+} from "../lib/dom";
 import { fullTime, relativeTime } from "../lib/format";
 import { VirtualList } from "../lib/virtual";
 import { currentScopeLabel, state, subscribe } from "../store";
@@ -66,7 +71,7 @@ function rowFromHit(hit: SearchHit): Row {
   };
 }
 
-export function createNoteList(): HTMLElement {
+export function createNoteList(): DisposableHTMLElement {
   const title = el("span", { class: "notelist__title" });
   const count = el("span", { class: "notelist__count" });
 
@@ -479,12 +484,12 @@ export function createNoteList(): HTMLElement {
     });
   }
 
-  subscribe(["notes", "searchHits", "listView", "loadingList"], () => {
+  const unsubscribeRows = subscribe(["notes", "searchHits", "listView", "loadingList"], () => {
     paintHeader();
     paintRows(false);
   });
-  subscribe(["scope", "scopeValue", "sortBy"], paintHeader);
-  subscribe(["activeTabId", "tabs"], paintActiveRow);
+  const unsubscribeHeader = subscribe(["scope", "scopeValue", "sortBy"], paintHeader);
+  const unsubscribeActive = subscribe(["activeTabId", "tabs"], paintActiveRow);
 
   // The card count depends on the width of the list column, which changes when
   // a panel is toggled as well as when the window is resized. Watching the
@@ -502,7 +507,13 @@ export function createNoteList(): HTMLElement {
   paintHeader();
   paintRows(false);
 
-  return root;
+  return disposableElement(root, () => {
+    unsubscribeRows();
+    unsubscribeHeader();
+    unsubscribeActive();
+    columnObserver.disconnect();
+    list.destroy();
+  });
 }
 
 /* ---------------------------------------------------------------- trash view */

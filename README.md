@@ -7,6 +7,23 @@
 
 笔记就是磁盘上的 `.md` 文件。应用不锁定任何数据：随时可以用别的编辑器打开、丢进网盘或 Git 同步，卸载后笔记依旧在。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="UI/screenshots/main-dark.png">
+  <img src="UI/screenshots/main-light.png" alt="巧记主界面" width="100%">
+</picture>
+
+---
+
+## 下载
+
+从 [GitHub Releases](https://github.com/7788dev/qiaoji/releases) 下载
+`Qiaoji-<版本>-windows-amd64-setup.exe`。发布页同时提供 `SHA256SUMS.txt`
+用于校验文件完整性。
+
+当前安装包尚未使用商业代码签名证书，因此 Windows SmartScreen 可能显示
+「Windows 已保护你的电脑」。请只从本仓库的 Releases 页面下载，并在运行前核对
+SHA-256；点击「更多信息」后可以选择「仍要运行」。
+
 ---
 
 ## 实测数据
@@ -143,30 +160,35 @@ PDF 用系统自带的 Edge 无头模式打印生成。渲染预览的就是同�
 
 ## 从源码构建
 
-需要 Go 1.24+、Node 18+、WebView2 运行时（Windows 10/11 自带）。
+需要 Go 1.25+、Node 20.19+、NSIS，以及 WebView2 运行时（Windows 10/11 自带）。
 
-```bash
+```powershell
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
 
 # 开发模式
 wails dev
 
-# 生产构建，产物在 build/bin/巧记.exe
-set CGO_ENABLED=0
-wails build -platform windows/amd64 -trimpath -ldflags "-s -w"
+# 生产安装包，产物在 build/bin/Qiaoji-1.0.0-windows-amd64-setup.exe
+$env:CGO_ENABLED = "0"
+wails build -platform windows/amd64 -nsis -installscope user -trimpath `
+  -ldflags "-s -w -X qiaoji/internal/config.AppVersion=1.0.0"
 ```
 
 代码检查与测试：
 
-```bash
+```powershell
 go vet ./...
 go test ./...
-cd frontend && npx tsc --noEmit && npm test
+Push-Location frontend
+npm ci
+npx tsc --noEmit
+npm test
+Pop-Location
 ```
 
 升级 KaTeX 或修改品牌资源后需要重新生成：
 
-```bash
+```powershell
 go run ./tools/genkatex   # 两份 KaTeX 样式表（内联版给导出，woff2 版给应用）
 python tools/genicon.py   # 应用图标、.ico、界面用的 mark 与文档用的 logo
 ```

@@ -53,6 +53,8 @@ function makeTab(id: string, content: string): Tab {
     scrollTop: 0,
     cursor: 0,
     mode: "edit",
+    revision: `revision-${id}`,
+    conflict: null,
   };
 }
 
@@ -69,12 +71,14 @@ function metaFor(tab: Tab): NoteMeta {
     excerpt: "",
     words: 1,
     size: 1,
+    revision: tab.revision,
   };
 }
 
 beforeEach(() => {
   vi.useFakeTimers();
   saveNote.mockReset();
+  vi.mocked(api.getNote).mockReset();
   saveNote.mockImplementation(async (path: string) => {
     const tab = state.tabs.find((t) => t.path === path);
     return metaFor(tab ?? makeTab("unknown", ""));
@@ -159,6 +163,88 @@ describe("saveAll", () => {
     saveNote.mockRejectedValueOnce(new Error("磁盘已满"));
 
     expect(await actions.saveAll()).toBe(false);
+  });
+});
+
+describe("closing tabs", () => {
+  it("keeps a dirty tab open when its final save fails", async () => {
+    const tab = makeTab("a", "A");
+    tab.content = "A edited";
+    state.tabs = [tab];
+    state.activeTabId = tab.id;
+    saveNote.mockRejectedValueOnce(new Error("磁盘已满"));
+
+    expect(await actions.closeTab(tab.id)).toBe(false);
+    expect(state.tabs).toEqual([tab]);
+    expect(state.activeTabId).toBe(tab.id);
+    expect(tab.content).toBe("A edited");
+  });
+
+  it("closes a dirty tab only after its final save succeeds", async () => {
+    const tab = makeTab("a", "A");
+    tab.content = "A edited";
+    state.tabs = [tab];
+    state.activeTabId = tab.id;
+
+    expect(await actions.closeTab(tab.id)).toBe(true);
+    expect(state.tabs).toEqual([]);
+    expect(state.activeTabId).toBeNull();
+  });
+
+  it("keeps every tab whose save failed while closing the others", async () => {
+    const a = makeTab("a", "A");
+    const b = makeTab("b", "B");
+    a.content = "A edited";
+    b.content = "B edited";
+    state.tabs = [a, b];
+    state.activeTabId = a.id;
+    saveNote
+      .mockRejectedValueOnce(new Error("A failed"))
+      .mockResolvedValueOnce(metaFor(b));
+
+    expect(await actions.closeAllTabs()).toBe(false);
+    expect(state.tabs.map((tab) => tab.id)).toEqual(["a"]);
+    expect(state.tabs[0].content).toBe("A edited");
+  });
+});
+
+describe("external edit conflicts", () => {
+  it("keeps the local buffer and suspends autosave when the backend rejects a stale revision", async () => {
+    const tab = makeTab("a", "A");
+    tab.content = "local edit";
+    state.tabs = [tab];
+    state.activeTabId = tab.id;
+    saveNote.mockRejectedValueOnce(new Error("笔记已在磁盘上被修改"));
+    vi.mocked(api.getNote).mockResolvedValueOnce({
+      ...metaFor(tab),
+      content: "remote edit",
+      revision: "remote-revision",
+    });
+
+    expect(await actions.saveTab(tab.id, { silent: true })).toBe(false);
+    expect(state.tabs[0].content).toBe("local edit");
+    expect(state.tabs[0].savedContent).toBe("A");
+    expect(state.tabs[0].conflict?.content).toBe("remote edit");
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(saveNote).toHaveBeenCalledTimes(1);
+  });
+
+  it("detects a changed disk revision while reconciling a dirty tab", async () => {
+    const tab = makeTab("a", "A");
+    tab.content = "local edit";
+    state.tabs = [tab];
+    state.activeTabId = tab.id;
+    vi.mocked(api.getNote).mockResolvedValueOnce({
+      ...metaFor(tab),
+      content: "remote edit",
+      revision: "remote-revision",
+    });
+
+    await actions.reconcileTabs();
+
+    expect(state.tabs[0].content).toBe("local edit");
+    expect(state.tabs[0].conflict?.revision).toBe("remote-revision");
   });
 });
 

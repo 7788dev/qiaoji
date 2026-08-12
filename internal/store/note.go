@@ -2,7 +2,9 @@ package store
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
+	"encoding/hex"
 	"strings"
 	"time"
 	"unicode"
@@ -22,6 +24,7 @@ type Meta struct {
 	Excerpt  string    `json:"excerpt"`
 	Words    int       `json:"words"`
 	Size     int64     `json:"size"`
+	Revision string    `json:"revision"`
 }
 
 type Note struct {
@@ -66,6 +69,11 @@ func newID() string {
 	b[5] = byte(ms)
 	_, _ = rand.Read(b[6:])
 	return idEncoding.EncodeToString(b[:])
+}
+
+func revisionOf(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // countWords treats every CJK ideograph as one word and every run of Latin

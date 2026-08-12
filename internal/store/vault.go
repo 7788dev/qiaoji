@@ -19,6 +19,7 @@ const InternalDir = ".qiaoji"
 var (
 	ErrNotFound = errors.New("note not found")
 	ErrExists   = errors.New("already exists")
+	ErrConflict = errors.New("note changed on disk")
 )
 
 type Vault struct {
@@ -192,6 +193,7 @@ func (v *Vault) readNote(abs string) (Note, error) {
 			Excerpt:  excerptOf(body, 90),
 			Words:    countWords(body),
 			Size:     info.Size(),
+			Revision: revisionOf(raw),
 		},
 		Content: body,
 	}, nil
@@ -249,6 +251,12 @@ func (v *Vault) Create(folder, title, body string) (Note, error) {
 // Save writes a new body for an existing note. The file is renamed when the
 // first heading changed, so Explorer keeps showing meaningful filenames.
 func (v *Vault) Save(abs, body string) (Note, error) {
+	return v.SaveIfRevision(abs, body, "", true)
+}
+
+// SaveIfRevision prevents an autosave from overwriting a version written by
+// another editor or sync client after this process loaded the note.
+func (v *Vault) SaveIfRevision(abs, body, expectedRevision string, force bool) (Note, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.contains(abs) {
@@ -258,6 +266,9 @@ func (v *Vault) Save(abs, body string) (Note, error) {
 	raw, err := os.ReadFile(abs)
 	if err != nil {
 		return Note{}, err
+	}
+	if !force && expectedRevision != "" && revisionOf(raw) != expectedRevision {
+		return Note{}, ErrConflict
 	}
 	fm, _, err := parseFrontMatter(raw)
 	if err != nil {
@@ -318,6 +329,34 @@ func (v *Vault) UpdateMeta(abs string, fn func(*frontMatter)) (Note, error) {
 	}
 	fn(&fm)
 	fm.Tags = normaliseTags(fm.Tags)
+	if err := writeAtomic(abs, renderFile(fm, body)); err != nil {
+		return Note{}, err
+	}
+	return v.readNote(abs)
+}
+
+// ReassignID gives a copied/conflicted note its own persistent identity.
+// External sync tools commonly duplicate a Markdown file byte-for-byte, which
+// otherwise leaves two paths claiming the same front-matter id.
+func (v *Vault) ReassignID(abs string) (Note, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if !v.contains(abs) {
+		return Note{}, ErrNotFound
+	}
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		return Note{}, err
+	}
+	fm, body, err := parseFrontMatter(raw)
+	if err != nil {
+		return Note{}, err
+	}
+	fm.ID = newID()
+	fm.Updated = time.Now()
+	if fm.Created.IsZero() {
+		fm.Created = fm.Updated
+	}
 	if err := writeAtomic(abs, renderFile(fm, body)); err != nil {
 		return Note{}, err
 	}
@@ -416,12 +455,33 @@ func (v *Vault) Duplicate(abs string) (Note, error) {
 }
 
 func writeAtomic(abs string, data []byte) error {
-	tmp := abs + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(abs), ".qiaoji-*.tmp")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, abs); err != nil {
-		_ = os.Remove(tmp)
+	tmpName := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := replaceFile(tmpName, abs); err != nil {
+		_ = os.Remove(tmpName)
 		return err
 	}
 	return nil

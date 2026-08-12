@@ -5,6 +5,7 @@ package index
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -112,24 +113,35 @@ func (ix *Index) Sync(v *store.Vault) (changed int, err error) {
 		size  int64
 		mtime int64
 	}{}
-	rows, err := ix.db.Query(`SELECT path, size, mtime FROM notes`)
+	idOwners := make(map[string]string)
+	rows, err := ix.db.Query(`SELECT id, path, size, mtime FROM notes`)
 	if err != nil {
 		ix.mu.Unlock()
 		return 0, err
 	}
 	for rows.Next() {
-		var p string
+		var id, p string
 		var size, mtime int64
-		if err := rows.Scan(&p, &size, &mtime); err != nil {
+		if err := rows.Scan(&id, &p, &size, &mtime); err != nil {
 			continue
 		}
 		known[p] = struct {
 			size  int64
 			mtime int64
 		}{size, mtime}
+		idOwners[id] = p
 	}
 	rows.Close()
 	ix.mu.Unlock()
+
+	// An empty walk is valid when the user deleted every note, but not when the
+	// vault disappeared or became unreadable between WalkDir and this point.
+	// Never turn a transient drive/network failure into a wholesale index wipe.
+	if len(stats) == 0 && len(known) > 0 {
+		if _, err := os.ReadDir(v.Root()); err != nil {
+			return 0, fmt.Errorf("verify empty vault: %w", err)
+		}
+	}
 
 	seen := make(map[string]bool, len(stats))
 	var stale []string
@@ -167,6 +179,13 @@ func (ix *Index) Sync(v *store.Vault) (changed int, err error) {
 			if err != nil {
 				continue
 			}
+			if owner, exists := idOwners[n.ID]; exists && owner != n.Path {
+				n, err = v.ReassignID(n.Path)
+				if err != nil {
+					return changed, fmt.Errorf("repair duplicate note id for %s: %w", p, err)
+				}
+			}
+			idOwners[n.ID] = n.Path
 			notes = append(notes, n)
 		}
 		if err := ix.upsert(notes, true); err != nil {
@@ -220,18 +239,7 @@ func (ix *Index) upsert(notes []store.Note, onlyIfNewer bool) error {
 	}
 	defer stmt.Close()
 
-	// A duplicated id (copied file) would break the unique index, so the path
-	// always wins and the clash gets a fresh surrogate.
-	dedupe, err := tx.Prepare(`DELETE FROM notes WHERE id = ? AND path <> ?`)
-	if err != nil {
-		return err
-	}
-	defer dedupe.Close()
-
 	for _, n := range notes {
-		if _, err := dedupe.Exec(n.ID, n.Path); err != nil {
-			return err
-		}
 		fav := 0
 		if n.Favorite {
 			fav = 1

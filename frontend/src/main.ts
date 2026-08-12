@@ -28,6 +28,7 @@ import { brandMark, createTabbar, createTitlebar, createWindowControls } from ".
 import { notify, reportError } from "./ui/toast";
 
 const root = qs(document, "#app");
+let teardownView: () => void = () => {};
 
 // Nothing in a desktop app should fail invisibly. Without this, a rejected
 // promise deep in a lazy import just leaves the UI subtly wrong with no clue
@@ -92,7 +93,7 @@ function applyZoom(): void {
 
 /* ---------------------------------------------------------------- shell */
 
-function buildShell(): void {
+function buildShell(): () => void {
   const editorPane = createEditorPane({
     onCursor: (line, column, selected) => statusbar.setCursor(line, column, selected),
   });
@@ -160,14 +161,15 @@ function buildShell(): void {
       !state.listVisible && state.listView !== "grid",
     );
   };
-  subscribe(["sidebarVisible", "listVisible", "listView"], paintLayout);
+  const unsubscribeLayout = subscribe(["sidebarVisible", "listVisible", "listView"], paintLayout);
   paintLayout();
 
-  bindDocumentTitle();
+  const unsubscribeTitle = bindDocumentTitle();
+  const unsubscribeZoom = subscribe(["settings"], applyZoom);
 
   /* -------------------------------------------------------- shortcuts */
 
-  installShortcuts(
+  const uninstallShortcuts = installShortcuts(
     [
       { key: "n", ctrl: true, run: () => void actions.newNote() },
       { key: "o", ctrl: true, run: () => openPalette(commands) },
@@ -214,43 +216,64 @@ function buildShell(): void {
 
   /* -------------------------------------------------------- backend events */
 
-  api.onBackend("vault:changed", (payload) => {
-    const external = (payload as { external?: boolean } | undefined)?.external ?? true;
-    actions.refreshAllSoon();
-    if (external) void actions.reconcileTabs();
-  });
-
-  api.onBackend("tray:new-note", () => void actions.newNote());
-
-  api.onBackend("window:focus", () => {
-    editorPane.focus();
-  });
+  const unsubscribeBackend = [
+    api.onBackend("vault:changed", (payload) => {
+      const external = (payload as { external?: boolean } | undefined)?.external ?? true;
+      actions.refreshAllSoon();
+      if (external) void actions.reconcileTabs();
+    }),
+    api.onBackend("tray:new-note", () => void actions.newNote()),
+    api.onBackend("window:focus", () => {
+      editorPane.focus();
+    }),
+  ];
 
   // The Go side vetoes the close and waits for this answer, so the process
   // cannot exit while the flush is still in flight.
-  api.onBackend("app:before-close", (payload) => {
-    const quitting = (payload as { quitting?: boolean } | undefined)?.quitting ?? true;
-    void (async () => {
-      const flushed = await actions.saveAll();
-      if (flushed) {
-        if (quitting) await api.confirmClose();
-        return;
-      }
-      // Losing the edit is worse than an unexpected window. Coming back from
-      // the tray matters most: hidden, there is nowhere to show the error.
-      await (quitting ? api.cancelClose() : api.showWindow());
-      notify.error("有笔记未能保存，请检查笔记库所在磁盘");
-    })();
-  });
+  unsubscribeBackend.push(
+    api.onBackend("app:before-close", (payload) => {
+      const quitting = (payload as { quitting?: boolean } | undefined)?.quitting ?? true;
+      void (async () => {
+        const flushed = await actions.saveAll();
+        if (flushed) {
+          if (quitting) await api.confirmClose();
+          return;
+        }
+        // Losing the edit is worse than an unexpected window. Coming back from
+        // the tray matters most: hidden, there is nowhere to show the error.
+        await (quitting ? api.cancelClose() : api.showWindow());
+        notify.error("有笔记未能保存，请检查笔记库所在磁盘");
+      })();
+    }),
+  );
 
   // A last-ditch flush for kill paths that skip the graceful close.
-  window.addEventListener("beforeunload", () => {
+  const beforeUnload = () => {
     void actions.saveAll();
-  });
+  };
+  window.addEventListener("beforeunload", beforeUnload);
 
-  window.addEventListener("blur", () => {
+  const onBlur = () => {
     if (state.settings.autoSave) void actions.saveAll();
-  });
+  };
+  window.addEventListener("blur", onBlur);
+
+  return () => {
+    window.removeEventListener("beforeunload", beforeUnload);
+    window.removeEventListener("blur", onBlur);
+    for (const unsubscribe of unsubscribeBackend) unsubscribe();
+    uninstallShortcuts();
+    unsubscribeLayout();
+    unsubscribeTitle();
+    unsubscribeZoom();
+    titlebar.destroy();
+    tabbar.destroy();
+    sidebar.destroy();
+    notelist.destroy();
+    statusbar.destroy();
+    editorPane.destroy();
+    shell.remove();
+  };
 }
 
 /* ---------------------------------------------------------------- boot */
@@ -275,6 +298,7 @@ function adoptPayload(payload: BootstrapPayload): void {
  * first-run screen: a healthy launch goes straight into the app.
  */
 function showVaultError(message: string): void {
+  teardownView();
   const retry = el(
     "button",
     {
@@ -288,8 +312,8 @@ function showVaultError(message: string): void {
     "重试",
   );
 
-  root.replaceChildren(
-    el(
+  const controls = createWindowControls();
+  const screen = el(
       "div",
       { class: "welcome-screen" },
       el(
@@ -298,7 +322,7 @@ function showVaultError(message: string): void {
         brandMark("titlebar__mark"),
         el("span", { class: "titlebar__title" }, "巧记"),
         el("div", { class: "spacer" }),
-        createWindowControls(),
+        controls,
       ),
       el(
         "div",
@@ -331,8 +355,12 @@ function showVaultError(message: string): void {
           ),
         ),
       ),
-    ),
-  );
+    );
+  root.replaceChildren(screen);
+  teardownView = () => {
+    controls.destroy();
+    screen.remove();
+  };
 }
 
 async function start(): Promise<void> {
@@ -354,8 +382,8 @@ async function start(): Promise<void> {
 }
 
 async function enterApp(payload: BootstrapPayload): Promise<void> {
-  buildShell();
-  subscribe(["settings"], applyZoom);
+  teardownView();
+  teardownView = buildShell();
 
   await actions.refreshAll();
 

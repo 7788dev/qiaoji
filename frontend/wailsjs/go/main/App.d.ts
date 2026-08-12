@@ -66,7 +66,7 @@ export function RestoreNote(arg1:string):Promise<store.Restored>;
 
 export function RevealInExplorer(arg1:string):Promise<void>;
 
-export function SaveNote(arg1:string,arg2:string):Promise<store.Meta>;
+export function SaveNote(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<store.Meta>;
 
 export function SaveSettings(arg1:config.Settings):Promise<config.Settings>;
 

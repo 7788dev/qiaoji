@@ -24,8 +24,9 @@ import (
 // App is the API surface bound to the frontend. Every exported method here
 // becomes a callable in frontend/wailsjs/go/main/App.
 type App struct {
-	ctx      context.Context
-	settings *config.Store
+	ctx         context.Context
+	settings    *config.Store
+	settingsErr error
 
 	// tray is set before Run so window commands can ask whether hiding to the
 	// notification area is actually safe.
@@ -114,12 +115,21 @@ func (s *vaultSession) close() {
 }
 
 func NewApp() *App {
-	return &App{settings: config.Load(), started: make(chan struct{})}
+	settings, err := config.Load()
+	return &App{settings: settings, settingsErr: err, started: make(chan struct{})}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	defer a.startOnce.Do(func() { close(a.started) })
+
+	if a.settingsErr != nil {
+		a.mu.Lock()
+		a.vaultErr = fmt.Sprintf("无法加载设置: %v。请选择原来的笔记库文件夹。", a.settingsErr)
+		a.mu.Unlock()
+		runtime.LogErrorf(ctx, "load settings: %v", a.settingsErr)
+		return
+	}
 
 	// There is no welcome screen: the app always opens a library on launch and
 	// writes the starter notes the first time that folder is used.
@@ -471,6 +481,18 @@ func (a *App) GetNote(path, id string) (store.Note, error) {
 	return v.Read(resolved)
 }
 
+func updateIndexedNote(ix *index.Index, n store.Note, previousPath string) error {
+	if previousPath != "" && n.Path != previousPath {
+		if err := ix.Remove(previousPath); err != nil {
+			return fmt.Errorf("移除旧索引失败: %w", err)
+		}
+	}
+	if err := ix.Upsert(n); err != nil {
+		return fmt.Errorf("更新搜索索引失败: %w", err)
+	}
+	return nil
+}
+
 func (a *App) CreateNote(folder, title string) (store.Note, error) {
 	v, ix, done, err := a.need()
 	if err != nil {
@@ -482,25 +504,27 @@ func (a *App) CreateNote(folder, title string) (store.Note, error) {
 	if err != nil {
 		return store.Note{}, err
 	}
-	_ = ix.Upsert(n)
+	if err := updateIndexedNote(ix, n, ""); err != nil {
+		return n, err
+	}
 	return n, nil
 }
 
-func (a *App) SaveNote(path, content string) (store.Meta, error) {
+func (a *App) SaveNote(path, content, expectedRevision string, force bool) (store.Meta, error) {
 	v, ix, done, err := a.need()
 	if err != nil {
 		return store.Meta{}, err
 	}
 	defer done()
 	a.touch()
-	n, err := v.Save(path, content)
+	n, err := v.SaveIfRevision(path, content, expectedRevision, force)
 	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return store.Meta{}, errors.New("笔记已在磁盘上被修改")
+		}
 		return store.Meta{}, err
 	}
-	if n.Path != path {
-		_ = ix.Remove(path)
-	}
-	if err := ix.Upsert(n); err != nil {
+	if err := updateIndexedNote(ix, n, path); err != nil {
 		return n.Meta, err
 	}
 	return n.Meta, nil
@@ -517,10 +541,9 @@ func (a *App) RenameNote(path, title string) (store.Meta, error) {
 	if err != nil {
 		return store.Meta{}, err
 	}
-	if n.Path != path {
-		_ = ix.Remove(path)
+	if err := updateIndexedNote(ix, n, path); err != nil {
+		return n.Meta, err
 	}
-	_ = ix.Upsert(n)
 	return n.Meta, nil
 }
 
@@ -535,10 +558,9 @@ func (a *App) MoveNote(path, folder string) (store.Meta, error) {
 	if err != nil {
 		return store.Meta{}, err
 	}
-	if n.Path != path {
-		_ = ix.Remove(path)
+	if err := updateIndexedNote(ix, n, path); err != nil {
+		return n.Meta, err
 	}
-	_ = ix.Upsert(n)
 	return n.Meta, nil
 }
 
@@ -553,7 +575,9 @@ func (a *App) DuplicateNote(path string) (store.Meta, error) {
 	if err != nil {
 		return store.Meta{}, err
 	}
-	_ = ix.Upsert(n)
+	if err := updateIndexedNote(ix, n, ""); err != nil {
+		return n.Meta, err
+	}
 	return n.Meta, nil
 }
 
@@ -568,7 +592,9 @@ func (a *App) SetFavorite(path string, favorite bool) (store.Meta, error) {
 	if err != nil {
 		return store.Meta{}, err
 	}
-	_ = ix.Upsert(n)
+	if err := updateIndexedNote(ix, n, ""); err != nil {
+		return n.Meta, err
+	}
 	return n.Meta, nil
 }
 
@@ -583,7 +609,9 @@ func (a *App) SetNoteTags(path string, tags []string) (store.Meta, error) {
 	if err != nil {
 		return store.Meta{}, err
 	}
-	_ = ix.Upsert(n)
+	if err := updateIndexedNote(ix, n, ""); err != nil {
+		return n.Meta, err
+	}
 	return n.Meta, nil
 }
 
@@ -630,10 +658,14 @@ func (a *App) RestoreNote(entryID string) (store.Restored, error) {
 	if out.Kind == store.TrashFolder {
 		// The restored notes are absent from the index, so a stat walk picks
 		// up exactly them and leaves the rest of the library alone.
-		_, _ = ix.Sync(v)
+		if _, err := ix.Sync(v); err != nil {
+			return out, fmt.Errorf("恢复后的索引同步失败: %w", err)
+		}
 		return out, nil
 	}
-	_ = ix.Upsert(out.Note)
+	if err := updateIndexedNote(ix, out.Note, ""); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -757,9 +789,11 @@ func (a *App) mutateTag(name string, fn func([]string) []string) (int, error) {
 	for _, m := range metas {
 		note, err := v.SetTags(m.Path, fn(m.Tags))
 		if err != nil {
-			continue
+			return n, err
 		}
-		_ = ix.Upsert(note)
+		if err := updateIndexedNote(ix, note, ""); err != nil {
+			return n, err
+		}
 		n++
 	}
 	return n, nil

@@ -1,6 +1,7 @@
 package index
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -114,6 +115,50 @@ func TestSyncRemovesDeletedFiles(t *testing.T) {
 	}
 	if n, _ := ix.Count(); n != 2 {
 		t.Errorf("Count = %d, want 2 after trashing one note", n)
+	}
+}
+
+func TestSyncRepairsDuplicatedFrontMatterIDs(t *testing.T) {
+	v, ix := newFixture(t)
+	original, err := v.Create("", "原始笔记", "# 原始笔记\n\n内容。\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(original.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(v.Root(), "原始笔记 - 冲突副本.md")
+	if err := os.WriteFile(copyPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for pass := 1; pass <= 3; pass++ {
+		if _, err := ix.Sync(v); err != nil {
+			t.Fatalf("Sync pass %d: %v", pass, err)
+		}
+		notes, err := ix.List(Query{Scope: "all"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(notes) != 2 {
+			t.Fatalf("Sync pass %d indexed %d notes, want 2", pass, len(notes))
+		}
+		if notes[0].ID == notes[1].ID {
+			t.Fatalf("Sync pass %d kept duplicate id %q", pass, notes[0].ID)
+		}
+	}
+
+	first, err := v.Read(original.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := v.Read(copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID {
+		t.Fatalf("repaired ids were not persisted: %q", first.ID)
 	}
 }
 

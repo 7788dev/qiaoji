@@ -9,6 +9,15 @@
 type Falsy = null | undefined | false;
 export type Child = Node | string | number | Falsy | Child[];
 
+export type DisposableHTMLElement = HTMLElement & { destroy(): void };
+
+export function disposableElement<T extends HTMLElement>(
+  node: T,
+  destroy: () => void,
+): T & DisposableHTMLElement {
+  return Object.assign(node, { destroy });
+}
+
 export interface Attrs {
   class?: string;
   id?: string;

@@ -24,6 +24,9 @@ func (v *Vault) StatWalk() ([]FileStat, error) {
 	var out []FileStat
 	err := filepath.WalkDir(v.root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if p == v.root {
+				return err
+			}
 			return nil
 		}
 		if d.IsDir() {

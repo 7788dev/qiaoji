@@ -5,13 +5,18 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 const AppName = "巧记"
-const AppVersion = "1.0.0"
+
+// AppVersion is replaced by release builds with:
+// -ldflags "-X qiaoji/internal/config.AppVersion=<tag version>"
+var AppVersion = "dev"
 
 // WindowState remembers the frame between sessions.
 type WindowState struct {
@@ -110,15 +115,24 @@ func Dir() string {
 func path() string { return filepath.Join(Dir(), "settings.json") }
 
 type Store struct {
-	mu sync.RWMutex
-	s  Settings
+	mu     sync.RWMutex
+	saveMu sync.Mutex
+	path   string
+	s      Settings
 }
 
-func Load() *Store {
-	st := &Store{s: Defaults()}
-	data, err := os.ReadFile(path())
+func Load() (*Store, error) {
+	return load(path())
+}
+
+func load(settingsPath string) (*Store, error) {
+	st := &Store{path: settingsPath, s: Defaults()}
+	data, err := os.ReadFile(settingsPath)
 	if err != nil {
-		return st
+		if os.IsNotExist(err) {
+			return st, nil
+		}
+		return st, fmt.Errorf("读取设置失败: %w", err)
 	}
 	// Editors and PowerShell happily write JSON with a UTF-8 BOM, which the
 	// decoder rejects. Silently resetting every preference because of three
@@ -129,11 +143,15 @@ func Load() *Store {
 	// upgrading from an older settings file.
 	loaded := Defaults()
 	if err := json.Unmarshal(data, &loaded); err != nil {
-		return st
+		backup := fmt.Sprintf("%s.corrupt-%s", settingsPath, time.Now().Format("20060102-150405.000000000"))
+		if renameErr := os.Rename(settingsPath, backup); renameErr != nil {
+			return st, fmt.Errorf("设置文件损坏（%v），且无法备份原文件: %w", err, renameErr)
+		}
+		return st, fmt.Errorf("设置文件损坏，已备份到 %s: %w", backup, err)
 	}
 	st.s = loaded
 	st.s.normalise()
-	return st
+	return st, nil
 }
 
 func (s *Settings) normalise() {
@@ -228,18 +246,47 @@ func (st *Store) Patch(fn func(*Settings)) error {
 }
 
 func (st *Store) Save() error {
+	st.saveMu.Lock()
+	defer st.saveMu.Unlock()
+
 	st.mu.RLock()
 	data, err := json.MarshalIndent(st.s, "", "  ")
 	st.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(Dir(), 0o755); err != nil {
+	dir := filepath.Dir(st.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := path() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, ".settings-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path())
+	tmpName := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, st.path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }

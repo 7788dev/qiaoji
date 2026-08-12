@@ -1,7 +1,13 @@
 import * as actions from "../actions";
 import * as api from "../api";
 import markUrl from "../assets/mark.png";
-import { el, icon, on } from "../lib/dom";
+import {
+  disposableElement,
+  el,
+  icon,
+  on,
+  type DisposableHTMLElement,
+} from "../lib/dom";
 import { isDirty, state, subscribe } from "../store";
 import type { Tab } from "../types";
 import { showMenu } from "./menu";
@@ -58,7 +64,8 @@ function windowGlyph(kind: "min" | "max" | "restore" | "close"): SVGSVGElement {
  * Minimise / maximise / close. Extracted so the welcome screen has them too;
  * a frameless window with no way to close it is a trap.
  */
-export function createWindowControls(): HTMLElement {
+export function createWindowControls(): DisposableHTMLElement {
+  let destroyed = false;
   const maxButton = el("button", {
     class: "wbtn",
     type: "button",
@@ -71,13 +78,14 @@ export function createWindowControls(): HTMLElement {
 
   async function paintMaxButton(): Promise<void> {
     const maximised = await api.windowIsMaximised();
+    if (destroyed) return;
     maxButton.replaceChildren(windowGlyph(maximised ? "restore" : "max"));
     maxButton.title = maximised ? "向下还原" : "最大化";
   }
   void paintMaxButton();
-  on(window, "resize", () => void paintMaxButton());
+  const removeResize = on(window, "resize", () => void paintMaxButton());
 
-  return el(
+  const root = el(
     "div",
     { class: "titlebar__controls" },
     el(
@@ -104,9 +112,14 @@ export function createWindowControls(): HTMLElement {
       windowGlyph("close"),
     ),
   );
+  return disposableElement(root, () => {
+    destroyed = true;
+    removeResize();
+  });
 }
 
-export function createTitlebar(handlers: TitlebarHandlers): HTMLElement {
+export function createTitlebar(handlers: TitlebarHandlers): DisposableHTMLElement {
+  const controls = createWindowControls();
   const bar = el(
     "header",
     { class: "titlebar" },
@@ -121,18 +134,21 @@ export function createTitlebar(handlers: TitlebarHandlers): HTMLElement {
       iconButton("more", "命令面板  Ctrl+Shift+P", handlers.openPalette),
       iconButton("settings", "设置", handlers.openSettings),
     ),
-    createWindowControls(),
+    controls,
   );
 
   // Double-clicking the drag region is the standard maximise gesture, and its
   // absence in a frameless window is immediately noticeable.
-  on(bar, "dblclick", (ev) => {
+  const removeDoubleClick = on(bar, "dblclick", (ev) => {
     const target = ev.target as HTMLElement;
     if (target.closest(".titlebar__actions, .titlebar__controls")) return;
     void api.windowToggleMaximise();
   });
 
-  return bar;
+  return disposableElement(bar, () => {
+    removeDoubleClick();
+    controls.destroy();
+  });
 }
 
 function iconButton(name: string, title: string, run: () => void): HTMLElement {
@@ -153,7 +169,7 @@ export interface TabbarHandlers {
   openOutline: (anchor: HTMLElement) => void;
 }
 
-export function createTabbar(handlers: TabbarHandlers): HTMLElement {
+export function createTabbar(handlers: TabbarHandlers): DisposableHTMLElement {
   const strip = el("div", { class: "tabbar__strip", role: "tablist" });
 
   const modeButton = el("button", {
@@ -307,7 +323,9 @@ export function createTabbar(handlers: TabbarHandlers): HTMLElement {
     const active = tab.id === state.activeTabId;
     node.root.classList.toggle("is-active", active);
     node.root.setAttribute("aria-selected", active ? "true" : "false");
-    node.dot.hidden = !isDirty(tab);
+    node.dot.hidden = !isDirty(tab) && !tab.conflict;
+    node.dot.classList.toggle("is-conflict", Boolean(tab.conflict));
+    node.dot.title = tab.conflict ? "存在磁盘冲突" : "未保存";
 
     const title = actions.tabTitle(tab);
     if (title === node.title) return;
@@ -364,9 +382,13 @@ export function createTabbar(handlers: TabbarHandlers): HTMLElement {
     if (node) paintTab(tab, node);
   }
 
-  subscribe(["tabs", "activeTabId"], syncTabs);
-  subscribe(["docRevision"], paintActiveTab);
+  const unsubscribeTabs = subscribe(["tabs", "activeTabId"], syncTabs);
+  const unsubscribeDoc = subscribe(["docRevision"], paintActiveTab);
   syncTabs();
 
-  return bar;
+  return disposableElement(bar, () => {
+    unsubscribeTabs();
+    unsubscribeDoc();
+    tabNodes.clear();
+  });
 }

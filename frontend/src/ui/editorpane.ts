@@ -26,6 +26,7 @@ export interface EditorPaneHandlers {
 export interface EditorPane {
   root: HTMLElement;
   editor: MarkdownEditor;
+  destroy: () => void;
   toggleMode: () => void;
   setMode: (mode: "edit" | "preview") => void;
   showOutline: (anchor: HTMLElement) => void;
@@ -79,8 +80,8 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     editorSettings(),
   );
 
-  actions.registerEditor(editor);
-  installContextMenu(editor);
+  const unregisterEditor = actions.registerEditor(editor);
+  const removeContextMenu = installContextMenu(editor);
 
   /**
    * Picks up maths or code typed into a note that previously had neither.
@@ -224,7 +225,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
   }
 
   // Links inside the preview must not navigate the WebView away from the app.
-  on(previewInner, "click", (ev) => {
+  const removePreviewClick = on(previewInner, "click", (ev) => {
     const target = (ev.target as HTMLElement).closest<HTMLElement>("a");
     if (!target) return;
     ev.preventDefault();
@@ -369,13 +370,13 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     }
   }
 
-  subscribe(["activeTabId"], syncActiveTab);
-  subscribe(["tabs"], () => {
+  const unsubscribeActive = subscribe(["activeTabId"], syncActiveTab);
+  const unsubscribeTabs = subscribe(["tabs"], () => {
     // A mode flip lives on the tab, so react to it without reloading the doc.
     const tab = activeTab();
     if (tab && tab.id === loadedTabId) applyMode();
   });
-  subscribe(["settings"], applyAppearance);
+  const unsubscribeSettings = subscribe(["settings"], applyAppearance);
 
   applyAppearance();
   syncActiveTab();
@@ -383,6 +384,17 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
   return {
     root,
     editor,
+    destroy: () => {
+      unsubscribeActive();
+      unsubscribeTabs();
+      unsubscribeSettings();
+      ensureModules.cancel();
+      schedulePreview.cancel();
+      removePreviewClick();
+      removeContextMenu();
+      unregisterEditor();
+      editor.destroy();
+    },
     toggleMode,
     setMode,
     showOutline,
@@ -431,8 +443,8 @@ function insertEntries(editor: MarkdownEditor): MenuEntry[] {
  * this is the only context menu the editor has: it carries the clipboard
  * actions people expect plus the snippet and template inserters.
  */
-function installContextMenu(editor: MarkdownEditor): void {
-  on(editor.view.dom, "contextmenu", (ev) => {
+function installContextMenu(editor: MarkdownEditor): () => void {
+  return on(editor.view.dom, "contextmenu", (ev) => {
     const event = ev as MouseEvent;
     event.preventDefault();
 
@@ -522,7 +534,7 @@ function installContextMenu(editor: MarkdownEditor): void {
 }
 
 /** Keeps the document title in step with the active note. */
-export function bindDocumentTitle(): void {
+export function bindDocumentTitle(): () => void {
   let shown = "";
   const paint = () => {
     const tab = activeTab();
@@ -533,6 +545,7 @@ export function bindDocumentTitle(): void {
     shown = next;
     document.title = next;
   };
-  subscribe(["activeTabId", "tabs", "docRevision"], paint);
+  const unsubscribe = subscribe(["activeTabId", "tabs", "docRevision"], paint);
   paint();
+  return unsubscribe;
 }

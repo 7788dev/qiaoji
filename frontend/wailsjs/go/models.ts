@@ -329,6 +329,7 @@ export namespace store {
 	    excerpt: string;
 	    words: number;
 	    size: number;
+	    revision: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Meta(source);
@@ -347,6 +348,7 @@ export namespace store {
 	        this.excerpt = source["excerpt"];
 	        this.words = source["words"];
 	        this.size = source["size"];
+	        this.revision = source["revision"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -381,6 +383,7 @@ export namespace store {
 	    excerpt: string;
 	    words: number;
 	    size: number;
+	    revision: string;
 	    content: string;
 	
 	    static createFrom(source: any = {}) {
@@ -400,6 +403,7 @@ export namespace store {
 	        this.excerpt = source["excerpt"];
 	        this.words = source["words"];
 	        this.size = source["size"];
+	        this.revision = source["revision"];
 	        this.content = source["content"];
 	    }
 	

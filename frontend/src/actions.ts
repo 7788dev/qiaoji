@@ -6,7 +6,7 @@
  */
 
 import * as api from "./api";
-import { debounce } from "./lib/dom";
+import { debounce, el } from "./lib/dom";
 import { titleOf } from "./lib/markdown";
 import {
   activeTab,
@@ -26,6 +26,7 @@ import type {
   Stats as AppStats,
   Tab,
 } from "./types";
+import { openModal, type ModalHandle } from "./ui/modal";
 import { notify, reportError } from "./ui/toast";
 
 /* ---------------------------------------------------------------- editor hook */
@@ -41,8 +42,11 @@ interface EditorBridge {
 
 let editor: EditorBridge | null = null;
 
-export function registerEditor(bridge: EditorBridge): void {
+export function registerEditor(bridge: EditorBridge): () => void {
   editor = bridge;
+  return () => {
+    if (editor === bridge) editor = null;
+  };
 }
 
 /** The live buffer, which may be ahead of the last save. */
@@ -165,6 +169,8 @@ function tabFromNote(note: Note): Tab {
     scrollTop: 0,
     cursor: 0,
     mode: "edit",
+    revision: note.revision,
+    conflict: null,
   };
 }
 
@@ -217,9 +223,9 @@ export function activateTab(id: string, focus = true): void {
   if (focus) editor?.focus();
 }
 
-export async function closeTab(id: string, options: { skipPrompt?: boolean } = {}): Promise<void> {
+export async function closeTab(id: string, options: { skipPrompt?: boolean } = {}): Promise<boolean> {
   const tab = state.tabs.find((t) => t.id === id);
-  if (!tab) return;
+  if (!tab) return true;
 
   if (id === state.activeTabId) captureEditorInto(id);
   const current = state.tabs.find((t) => t.id === id);
@@ -227,9 +233,10 @@ export async function closeTab(id: string, options: { skipPrompt?: boolean } = {
   if (current && isDirty(current) && !options.skipPrompt) {
     // Auto-save means unsaved work is measured in milliseconds, so flushing is
     // friendlier than interrogating the user about it.
-    await saveTab(current.id, { silent: true });
+    if (!(await saveTab(current.id, { silent: true }))) return false;
   }
 
+  cancelScheduledSave(id);
   const index = state.tabs.findIndex((t) => t.id === id);
   const tabs = state.tabs.filter((t) => t.id !== id);
   let activeTabId = state.activeTabId;
@@ -238,16 +245,23 @@ export async function closeTab(id: string, options: { skipPrompt?: boolean } = {
     activeTabId = next ? next.id : null;
   }
   setState({ tabs, activeTabId });
+  return true;
 }
 
-export async function closeOtherTabs(keepId: string): Promise<void> {
+export async function closeOtherTabs(keepId: string): Promise<boolean> {
+  let closed = true;
   for (const tab of [...state.tabs]) {
-    if (tab.id !== keepId) await closeTab(tab.id);
+    if (tab.id !== keepId && !(await closeTab(tab.id))) closed = false;
   }
+  return closed;
 }
 
-export async function closeAllTabs(): Promise<void> {
-  for (const tab of [...state.tabs]) await closeTab(tab.id);
+export async function closeAllTabs(): Promise<boolean> {
+  let closed = true;
+  for (const tab of [...state.tabs]) {
+    if (!(await closeTab(tab.id))) closed = false;
+  }
+  return closed;
 }
 
 export function cycleTab(direction: 1 | -1): void {
@@ -286,6 +300,124 @@ function scheduleSave(id: string, delay: number): void {
   );
 }
 
+const conflictDialogs = new Set<string>();
+
+function isConflictError(err: unknown): boolean {
+  return (err instanceof Error ? err.message : String(err)).includes("笔记已在磁盘上被修改");
+}
+
+function applyDiskVersion(id: string, note: Note): void {
+  patchTab(id, {
+    path: note.path,
+    title: note.title,
+    folder: note.folder,
+    tags: note.tags ?? [],
+    favorite: note.favorite,
+    content: note.content,
+    savedContent: note.content,
+    revision: note.revision,
+    conflict: null,
+  });
+  if (id === state.activeTabId) {
+    editor?.syncDoc(note.content);
+    setState({ saveState: "idle" });
+  }
+}
+
+function markConflict(id: string, disk: Note): void {
+  cancelScheduledSave(id);
+  const tab = patchTab(id, { conflict: disk });
+  if (!tab) return;
+  if (id === state.activeTabId) setState({ saveState: "error" });
+  notify.error(`「${tabTitle(tab)}」在磁盘上有新的版本`, {
+    action: {
+      label: "处理冲突",
+      run: () => openConflictDialog(id),
+    },
+  });
+}
+
+async function resolveConflict(
+  id: string,
+  choice: "mine" | "disk" | "copy",
+): Promise<boolean> {
+  const tab = state.tabs.find((entry) => entry.id === id);
+  const disk = tab?.conflict;
+  if (!tab || !disk) return true;
+
+  if (choice === "mine") {
+    return saveTab(id, { silent: true, force: true });
+  }
+  if (choice === "disk") {
+    applyDiskVersion(id, disk);
+    return true;
+  }
+
+  try {
+    const duplicate = await api.duplicateNote(disk.path);
+    const saved = await api.saveNote(duplicate.path, tab.content, duplicate.revision, false);
+    const copy = await api.getNote(saved.path, saved.id);
+    applyDiskVersion(id, disk);
+    const copyTab = tabFromNote(copy);
+    setState({
+      tabs: [...state.tabs, copyTab],
+      activeTabId: copyTab.id,
+      saveState: "idle",
+    });
+    await Promise.all([refreshList(), refreshSidebar()]);
+    notify.success("已把本机修改另存为副本");
+    return true;
+  } catch (err) {
+    reportError("另存冲突副本", err);
+    return false;
+  }
+}
+
+function openConflictDialog(id: string): void {
+  const tab = state.tabs.find((entry) => entry.id === id);
+  if (!tab?.conflict || conflictDialogs.has(id)) return;
+  conflictDialogs.add(id);
+
+  let handle: ModalHandle;
+  const buttons: HTMLButtonElement[] = [];
+  const choose = async (choice: "mine" | "disk" | "copy") => {
+    for (const button of buttons) button.disabled = true;
+    const resolved = await resolveConflict(id, choice);
+    if (resolved) handle.close();
+    else for (const button of buttons) button.disabled = false;
+  };
+  const button = (label: string, choice: "mine" | "disk" | "copy", primary = false) => {
+    const node = el(
+      "button",
+      {
+        class: primary ? "btn btn--primary" : "btn",
+        type: "button",
+        onclick: () => void choose(choice),
+      },
+      label,
+    );
+    buttons.push(node);
+    return node;
+  };
+
+  handle = openModal({
+    title: "检测到同步冲突",
+    width: 520,
+    closeOnBackdrop: false,
+    body: el(
+      "div",
+      { class: "confirm__message" },
+      `「${tabTitle(tab)}」在你编辑期间被其他程序修改。请选择要保留的版本。`,
+    ),
+    footer: [
+      button("使用磁盘版本", "disk"),
+      button("另存我的修改", "copy"),
+      button("保留我的版本", "mine", true),
+    ],
+    onClose: () => conflictDialogs.delete(id),
+  });
+}
+
 /** Called on every keystroke; schedules the debounced write. */
 export function markDirty(content: string): void {
   const tab = activeTab();
@@ -304,13 +436,17 @@ export function markDirty(content: string): void {
     cancelScheduledSave(tab.id);
     return;
   }
+  if (tab.conflict) {
+    cancelScheduledSave(tab.id);
+    return;
+  }
   if (!state.settings.autoSave) return;
   scheduleSave(tab.id, state.settings.autoSaveDelayMs);
 }
 
 export async function saveTab(
   id: string,
-  options: { silent?: boolean } = {},
+  options: { silent?: boolean; force?: boolean } = {},
 ): Promise<boolean> {
   cancelScheduledSave(id);
   if (id === state.activeTabId) captureEditorInto(id);
@@ -321,12 +457,16 @@ export async function saveTab(
     if (!options.silent) notify.info("没有需要保存的修改");
     return true;
   }
+  if (tab.conflict && !options.force) {
+    openConflictDialog(id);
+    return false;
+  }
 
   setState({ saveState: "saving" });
   const content = tab.content;
   const previousPath = tab.path;
   try {
-    const meta = await api.saveNote(tab.path, content);
+    const meta = await api.saveNote(tab.path, content, tab.revision, options.force ?? false);
     patchTab(id, {
       savedContent: content,
       path: meta.path,
@@ -334,6 +474,8 @@ export async function saveTab(
       folder: meta.folder,
       tags: meta.tags ?? [],
       favorite: meta.favorite,
+      revision: meta.revision,
+      conflict: null,
     });
     if (id === state.activeTabId) {
       setState({ saveState: "saved" });
@@ -351,6 +493,13 @@ export async function saveTab(
     return true;
   } catch (err) {
     setState({ saveState: "error" });
+    if (isConflictError(err)) {
+      const disk = await api.getNote(tab.path, tab.id).catch(() => null);
+      if (disk) {
+        markConflict(id, disk);
+        return false;
+      }
+    }
     reportError("保存失败", err);
     return false;
   }
@@ -448,6 +597,8 @@ export async function renameNote(path: string, title: string): Promise<void> {
         title: meta.title,
         content: note.content,
         savedContent: note.content,
+        revision: note.revision,
+        conflict: null,
       });
       if (tab.id === state.activeTabId) editor?.syncDoc(note.content);
     }
@@ -464,7 +615,12 @@ export async function toggleFavorite(path: string): Promise<void> {
   const current = meta?.favorite ?? tab?.favorite ?? false;
   try {
     const updated = await api.setFavorite(path, !current);
-    if (tab) patchTab(tab.id, { favorite: updated.favorite });
+    if (tab) {
+      patchTab(tab.id, {
+        favorite: updated.favorite,
+        revision: updated.revision,
+      });
+    }
     await refreshList();
     void refreshSidebar();
     notify.success(updated.favorite ? "已加入收藏" : "已取消收藏");
@@ -477,7 +633,12 @@ export async function setTags(path: string, tags: string[]): Promise<void> {
   try {
     const updated = await api.setNoteTags(path, tags);
     const tab = tabByPath(path);
-    if (tab) patchTab(tab.id, { tags: updated.tags ?? [] });
+    if (tab) {
+      patchTab(tab.id, {
+        tags: updated.tags ?? [],
+        revision: updated.revision,
+      });
+    }
     await Promise.all([refreshList(), refreshSidebar()]);
   } catch (err) {
     reportError("更新标签", err);
@@ -488,7 +649,13 @@ export async function moveNote(path: string, folder: string): Promise<void> {
   try {
     const meta = await api.moveNote(path, folder);
     const tab = tabByPath(path);
-    if (tab) patchTab(tab.id, { path: meta.path, folder: meta.folder });
+    if (tab) {
+      patchTab(tab.id, {
+        path: meta.path,
+        folder: meta.folder,
+        revision: meta.revision,
+      });
+    }
     await Promise.all([refreshList(), refreshSidebar()]);
     notify.success(folder ? `已移动到「${folder}」` : "已移动到根目录");
   } catch (err) {
@@ -727,37 +894,37 @@ export async function reconcileTabs(): Promise<void> {
   // Fetched together: an external change with several tabs open used to wait
   // for one full round trip per tab, one after another.
   const loaded = await Promise.all(
-    state.tabs
-      .filter((tab) => !isDirty(tab))
-      .map((tab) =>
-        api.getNote(tab.path, tab.id).then(
-          (note) => ({ id: tab.id, note }),
-          () => ({ id: tab.id, note: null }),
-        ),
+    state.tabs.map((tab) =>
+      api.getNote(tab.path, tab.id).then(
+        (note) => ({ id: tab.id, note }),
+        () => ({ id: tab.id, note: null }),
       ),
+    ),
   );
 
   for (const { id, note } of loaded) {
     const tab = state.tabs.find((t) => t.id === id);
     if (!tab) continue;
     if (!note) {
-      // The note is gone; drop the tab rather than leave a dead one behind.
-      await closeTab(id, { skipPrompt: true });
+      // A dirty buffer is still the only surviving copy and must stay open.
+      if (!isDirty(tab)) await closeTab(id, { skipPrompt: true });
       continue;
     }
     // The user may have started typing while the read was in flight.
-    if (isDirty(tab)) continue;
-    if (note.content === tab.savedContent && note.path === tab.path) continue;
-    patchTab(id, {
-      path: note.path,
-      title: note.title,
-      folder: note.folder,
-      tags: note.tags ?? [],
-      favorite: note.favorite,
-      content: note.content,
-      savedContent: note.content,
-    });
-    if (id === state.activeTabId) editor?.syncDoc(note.content);
+    if (isDirty(tab)) {
+      if (note.revision !== tab.revision) {
+        markConflict(id, note);
+      } else if (note.path !== tab.path) {
+        patchTab(id, {
+          path: note.path,
+          folder: note.folder,
+          title: note.title,
+        });
+      }
+      continue;
+    }
+    if (note.revision === tab.revision && note.path === tab.path) continue;
+    applyDiskVersion(id, note);
   }
 }
 

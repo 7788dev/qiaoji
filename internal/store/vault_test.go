@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,6 +58,21 @@ func TestCreateReadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStatWalkReportsMissingRoot(t *testing.T) {
+	v := newVault(t)
+	if _, err := v.Create("", "会保留在索引里的笔记", "# 内容\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(v.Root()); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := v.StatWalk()
+	if err == nil {
+		t.Fatalf("StatWalk() = %v, nil; want a missing-root error", stats)
+	}
+}
+
 func TestSaveRenamesFileWhenHeadingChanges(t *testing.T) {
 	v := newVault(t)
 	n, err := v.Create("", "旧标题", "")
@@ -100,6 +116,71 @@ func TestSaveKeepsIDAndCreatedTime(t *testing.T) {
 	}
 	if !updated.Updated.After(created.Add(-1)) {
 		t.Error("updated should move forward")
+	}
+}
+
+func TestSaveIfRevisionRejectsExternalChange(t *testing.T) {
+	v := newVault(t)
+	n, err := v.Create("", "同步冲突", "# 同步冲突\n\n本机版本。\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(n.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm, _, err := parseFrontMatter(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(n.Path, renderFile(fm, "# 同步冲突\n\n远端版本。\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := v.SaveIfRevision(
+		n.Path,
+		"# 同步冲突\n\n不应覆盖远端。\n",
+		n.Revision,
+		false,
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("SaveIfRevision() error = %v, want ErrConflict", err)
+	}
+	disk, err := v.Read(n.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(disk.Content, "远端版本") {
+		t.Fatalf("external content was overwritten: %q", disk.Content)
+	}
+}
+
+func TestSaveDoesNotClobberSiblingTmpFile(t *testing.T) {
+	v := newVault(t)
+	n, err := v.Create("", "临时文件保护", "# 临时文件保护\n\n旧内容。\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	userTmp := n.Path + ".tmp"
+	if err := os.WriteFile(userTmp, []byte("user-owned"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := v.Save(n.Path, "# 临时文件保护\n\n新内容。\n"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(userTmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "user-owned" {
+		t.Fatalf("sibling .tmp file = %q, want user-owned", data)
+	}
+	matches, err := filepath.Glob(filepath.Join(v.Root(), ".qiaoji-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("atomic-write temporary files were not cleaned up: %v", matches)
 	}
 }
 
@@ -189,6 +270,38 @@ func TestTrashRestoreRoundTrip(t *testing.T) {
 	}
 	if left, _ := v.ListTrash(); len(left) != 0 {
 		t.Errorf("trash should be empty after restore, got %d", len(left))
+	}
+}
+
+func TestPurgeTrashRejectsRootAliases(t *testing.T) {
+	v := newVault(t)
+	n, err := v.Create("", "不能误删", "# 不能误删\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := v.Trash(n.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, entryID := range []string{"", ".", "..", "/", `\`, "nested/entry", `nested\entry`} {
+		if err := v.PurgeTrash(entryID); err == nil {
+			t.Errorf("PurgeTrash(%q) error = nil, want invalid-entry error", entryID)
+		}
+		items, listErr := v.ListTrash()
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		if len(items) != 1 || items[0].ID != item.ID {
+			t.Fatalf("PurgeTrash(%q) changed the trash: %+v", entryID, items)
+		}
+	}
+
+	if err := v.PurgeTrash(item.ID); err != nil {
+		t.Fatalf("PurgeTrash(valid id): %v", err)
+	}
+	if items, err := v.ListTrash(); err != nil || len(items) != 0 {
+		t.Fatalf("trash after valid purge = %+v, %v; want empty", items, err)
 	}
 }
 

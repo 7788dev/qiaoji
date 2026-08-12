@@ -157,6 +157,10 @@
   background: var(--fg-muted);
 }
 
+.tab__dot.is-conflict {
+  background: var(--danger);
+}
+
 .tab__close {
   display: grid;
   place-items: center;

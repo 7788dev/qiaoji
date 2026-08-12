@@ -12,6 +12,7 @@ export interface StatusbarHandlers {
 export interface Statusbar {
   root: HTMLElement;
   setCursor: (line: number, column: number, selected: number) => void;
+  destroy: () => void;
 }
 
 const SAVE_LABELS: Record<string, string> = {
@@ -20,6 +21,7 @@ const SAVE_LABELS: Record<string, string> = {
   saving: "保存中…",
   saved: "已保存",
   error: "保存失败",
+  conflict: "同步冲突",
 };
 
 export function createStatusbar(handlers: StatusbarHandlers): Statusbar {
@@ -144,14 +146,28 @@ export function createStatusbar(handlers: StatusbarHandlers): Statusbar {
     save.hidden = !tab;
     if (!tab) return;
 
-    const status = state.saveState === "idle" && isDirty(tab) ? "dirty" : state.saveState;
-    save.classList.toggle("is-dirty", status === "dirty" || status === "error");
+    const status = tab.conflict
+      ? "conflict"
+      : state.saveState === "idle" && isDirty(tab)
+        ? "dirty"
+        : state.saveState;
+    save.classList.toggle(
+      "is-dirty",
+      status === "dirty" || status === "error" || status === "conflict",
+    );
     save.classList.toggle("is-saved", status === "saved");
 
     save.replaceChildren(
       status === "saving"
         ? el("span", { class: "spinner" })
-        : icon(status === "error" ? "alert" : status === "dirty" ? "edit" : "check", 12),
+        : icon(
+            status === "error" || status === "conflict"
+              ? "alert"
+              : status === "dirty"
+                ? "edit"
+                : "check",
+            12,
+          ),
       el("span", null, SAVE_LABELS[status] ?? ""),
     );
   }
@@ -209,15 +225,21 @@ export function createStatusbar(handlers: StatusbarHandlers): Statusbar {
     paintMode();
   }
 
-  subscribe(["activeTabId", "tabs"], paintAll);
-  subscribe(["saveState"], paintSave);
+  const unsubscribeTabs = subscribe(["activeTabId", "tabs"], paintAll);
+  const unsubscribeSave = subscribe(["saveState"], paintSave);
   // Only the counts follow the live buffer; the save indicator is driven by
   // saveState, which markDirty already publishes when the state actually moves.
-  subscribe(["docRevision"], paintCountsSoon);
+  const unsubscribeDoc = subscribe(["docRevision"], paintCountsSoon);
   paintAll();
 
   return {
     root,
+    destroy: () => {
+      unsubscribeTabs();
+      unsubscribeSave();
+      unsubscribeDoc();
+      paintCountsSoon.cancel();
+    },
     setCursor: (nextLine, nextColumn, nextSelected) => {
       line = nextLine;
       column = nextColumn;
