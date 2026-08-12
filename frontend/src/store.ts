@@ -1,9 +1,14 @@
 /**
  * Application state with topic-based subscriptions.
  *
- * Panels subscribe to the specific keys they render, so typing in the editor
- * (which updates `tabs`) never triggers a sidebar or note-list repaint. That
- * is the difference between a smooth editor and a janky one at this scale.
+ * Panels subscribe to the specific keys they render, so typing never triggers
+ * a sidebar or note-list repaint. That is the difference between a smooth
+ * editor and a janky one at this scale.
+ *
+ * The split that makes it work is `tabs` versus `docRevision`. `tabs` is
+ * republished only when a tab is opened, closed, activated or has its metadata
+ * changed; the live buffer is mutated in place and announced on `docRevision`,
+ * which only the few pieces that track the text as it is typed subscribe to.
  */
 
 import type {
@@ -40,6 +45,14 @@ export interface AppState {
 
   tabs: Tab[];
   activeTabId: string | null;
+
+  /**
+   * Bumped on every editor change. Only the parts that must follow the text as
+   * it is typed — the dirty marker, the word count, the window title, the live
+   * preview — listen here, so a keystroke costs a few text nodes rather than a
+   * rebuild of the tab strip and the note list.
+   */
+  docRevision: number;
 
   /** Non-null while the search panel is filtering the note list. */
   searchQuery: string;
@@ -100,6 +113,7 @@ export const state: AppState = {
 
   tabs: [],
   activeTabId: null,
+  docRevision: 0,
 
   searchQuery: "",
   searchHits: null,

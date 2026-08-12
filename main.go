@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"os"
+	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -137,17 +138,123 @@ func (a *App) onSecondInstance(options.SecondInstanceData) {
 	a.emit("window:focus", nil)
 }
 
-// onBeforeClose gives the frontend a chance to flush unsaved edits, and honours
-// the "close to tray" preference.
-func (a *App) onBeforeClose(ctx context.Context) bool {
-	a.emit("app:before-close", nil)
+// closeFlushTimeout bounds how long the window stays open waiting for the
+// frontend to answer. A wedged WebView must not leave a window that refuses to
+// close; anything short of that is a normal flush and finishes far sooner.
+const closeFlushTimeout = 8 * time.Second
 
-	if a.settings.Get().CloseToTray && a.tray.Available() {
-		wruntime.WindowHide(ctx)
-		return true // veto the close; the tray keeps the app reachable
-	}
+// onBeforeClose runs for every exit path, including runtime.Quit.
+//
+// It is a two-step handshake. The first attempt is vetoed and the frontend is
+// asked to flush; ConfirmClose comes back once every buffer is on disk and
+// releases the veto. Returning false immediately, as this used to, let the
+// process exit while the asynchronous flush was still in flight.
+func (a *App) onBeforeClose(ctx context.Context) bool {
 	a.persistWindow(ctx)
-	return false
+
+	// Closing the window is not quitting when the tray is holding the app.
+	// A quit asked for explicitly (tray menu) sets quitRequested and skips it,
+	// because the tray is the only way back from a hidden window.
+	if !a.quitRequested.Load() && a.settings.Get().CloseToTray && a.tray.Available() {
+		a.emit("app:before-close", map[string]any{"quitting": false})
+		wruntime.WindowHide(ctx)
+		return true
+	}
+
+	a.closeMu.Lock()
+	switch a.closePhase {
+	case closeConfirmed:
+		a.closeMu.Unlock()
+		return false
+	case closeFlushing:
+		// A second click while the first flush is still running.
+		a.closeMu.Unlock()
+		return true
+	}
+	done := make(chan struct{})
+	a.closePhase, a.closeDone = closeFlushing, done
+	a.closeMu.Unlock()
+
+	a.emit("app:before-close", map[string]any{"quitting": true})
+	go a.forceCloseAfter(done, closeFlushTimeout)
+	return true
+}
+
+// forceCloseAfter releases the veto if the frontend never answers.
+func (a *App) forceCloseAfter(done <-chan struct{}, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		if a.ctx != nil {
+			wruntime.LogWarning(a.ctx, "close flush timed out; quitting anyway")
+		}
+		a.ConfirmClose()
+	}
+}
+
+// ConfirmClose is the frontend's half of the close handshake: every dirty
+// buffer has been written and the window may go.
+func (a *App) ConfirmClose() {
+	a.closeMu.Lock()
+	if a.closePhase == closeConfirmed {
+		a.closeMu.Unlock()
+		return
+	}
+	a.closePhase = closeConfirmed
+	a.releaseCloseWaiterLocked()
+	a.closeMu.Unlock()
+
+	a.quitRequested.Store(true)
+	if a.ctx != nil {
+		wruntime.Quit(a.ctx)
+	}
+}
+
+// CancelClose keeps the window open because a buffer could not be written.
+// Quitting anyway would discard the edit with nowhere to recover it from.
+func (a *App) CancelClose() {
+	a.closeMu.Lock()
+	if a.closePhase == closeConfirmed {
+		a.closeMu.Unlock()
+		return
+	}
+	a.closePhase = closeIdle
+	a.releaseCloseWaiterLocked()
+	a.closeMu.Unlock()
+
+	a.quitRequested.Store(false)
+	// The quit may have come from the tray with the window already hidden.
+	// Refusing to exit behind a hidden window would look like nothing
+	// happened, so the window comes back with the error on it.
+	a.ShowWindow()
+}
+
+// ShowWindow brings the window forward, used when something needs attention
+// after the app was sent to the tray.
+func (a *App) ShowWindow() {
+	if a.ctx == nil {
+		return
+	}
+	showWindow(a.ctx)
+}
+
+func (a *App) releaseCloseWaiterLocked() {
+	if a.closeDone != nil {
+		close(a.closeDone)
+		a.closeDone = nil
+	}
+}
+
+// RequestQuit exits for real, ignoring the close-to-tray preference. The tray
+// menu is the only way back from a hidden window, so its quit cannot hide.
+func (a *App) RequestQuit() {
+	if a.ctx == nil {
+		return
+	}
+	a.quitRequested.Store(true)
+	wruntime.Quit(a.ctx)
 }
 
 // restoreWindowPosition puts the window back where it was, but only if that
@@ -208,6 +315,8 @@ func (a *App) WindowIsMaximised() bool {
 	return wruntime.WindowIsMaximised(a.ctx)
 }
 
+// WindowClose is the title-bar close button, so it honours the close-to-tray
+// preference. RequestQuit is the one that always exits.
 func (a *App) WindowClose() {
 	if a.ctx == nil {
 		return

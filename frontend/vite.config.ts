@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 
 /** CodeMirror packages needed before the first keystroke. */
@@ -52,5 +53,12 @@ export default defineConfig({
   },
   esbuild: {
     legalComments: "none",
+  },
+  test: {
+    // jsdom rather than a browser: the tests here cover pure logic and DOM
+    // bookkeeping, which is where the interaction bugs actually lived.
+    environment: "jsdom",
+    include: ["src/**/*.test.ts"],
+    restoreMocks: true,
   },
 });

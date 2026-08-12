@@ -178,11 +178,14 @@ func TestTrashRestoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if restored.Folder != "学习" {
-		t.Errorf("restored into %q, want 学习", restored.Folder)
+	if restored.Kind != TrashNote {
+		t.Errorf("restored kind = %q, want %q", restored.Kind, TrashNote)
 	}
-	if !strings.Contains(restored.Content, "内容。") {
-		t.Errorf("restored content = %q", restored.Content)
+	if restored.Note.Folder != "学习" {
+		t.Errorf("restored into %q, want 学习", restored.Note.Folder)
+	}
+	if !strings.Contains(restored.Note.Content, "内容。") {
+		t.Errorf("restored content = %q", restored.Note.Content)
 	}
 	if left, _ := v.ListTrash(); len(left) != 0 {
 		t.Errorf("trash should be empty after restore, got %d", len(left))
@@ -204,8 +207,8 @@ func TestRestoreWhenOriginalFolderIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if restored.Folder != "临时" {
-		t.Errorf("folder = %q, want the folder to be recreated", restored.Folder)
+	if restored.Note.Folder != "临时" {
+		t.Errorf("folder = %q, want the folder to be recreated", restored.Note.Folder)
 	}
 }
 
@@ -290,7 +293,10 @@ func TestCountWordsMixedScripts(t *testing.T) {
 
 func TestFrontMatterSurvivesRoundTrip(t *testing.T) {
 	raw := "---\nid: abc123\ntitle: 测试\ntags:\n  - 工作\nfavorite: true\n---\n\n# 测试\n\n正文\n"
-	fm, body := parseFrontMatter([]byte(raw))
+	fm, body, err := parseFrontMatter([]byte(raw))
+	if err != nil {
+		t.Fatalf("parseFrontMatter: %v", err)
+	}
 	if fm.ID != "abc123" || fm.Title != "测试" || !fm.Favorite {
 		t.Fatalf("parsed front matter = %+v", fm)
 	}
@@ -301,7 +307,7 @@ func TestFrontMatterSurvivesRoundTrip(t *testing.T) {
 		t.Fatalf("body = %q", body)
 	}
 
-	again, body2 := parseFrontMatter(renderFile(fm, body))
+	again, body2, _ := parseFrontMatter(renderFile(fm, body))
 	if again.ID != fm.ID || again.Title != fm.Title || again.Favorite != fm.Favorite {
 		t.Errorf("round trip lost data: %+v -> %+v", fm, again)
 	}
@@ -313,12 +319,208 @@ func TestFrontMatterSurvivesRoundTrip(t *testing.T) {
 func TestFrontMatterIgnoresLooseDashes(t *testing.T) {
 	// A note that merely starts with a horizontal rule is not front matter.
 	raw := "---\n\n这只是分割线开头的正文。\n"
-	fm, body := parseFrontMatter([]byte(raw))
+	fm, body, _ := parseFrontMatter([]byte(raw))
 	if fm.ID != "" {
 		t.Errorf("unexpected front matter: %+v", fm)
 	}
 	if !strings.Contains(body, "分割线") {
 		t.Errorf("body = %q", body)
+	}
+}
+
+// The app is one editor among several. Keys it does not model belong to
+// whoever wrote them, and a save must hand them back untouched.
+func TestSavePreservesForeignFrontMatterKeys(t *testing.T) {
+	v := newVault(t)
+	n, err := v.Create("", "外部笔记", "# 外部笔记\n\n正文。\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := "---\n" +
+		"id: " + n.ID + "\n" +
+		"title: 外部笔记\n" +
+		"aliases:\n  - 别名一\n  - 别名二\n" +
+		"cssclass: wide-table\n" +
+		"publish: true\n" +
+		"custom-field: 保留我\n" +
+		"---\n\n# 外部笔记\n\n正文。\n"
+	if err := os.WriteFile(n.Path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := v.Save(n.Path, "# 外部笔记\n\n改过的正文。\n"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	after, err := os.ReadFile(n.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"aliases", "别名一", "别名二", "cssclass", "wide-table", "publish", "custom-field", "保留我"} {
+		if !strings.Contains(string(after), want) {
+			t.Errorf("save dropped %q from the front matter:\n%s", want, after)
+		}
+	}
+	if !strings.Contains(string(after), "改过的正文。") {
+		t.Errorf("save lost the new body:\n%s", after)
+	}
+}
+
+func TestUpdateMetaPreservesForeignFrontMatterKeys(t *testing.T) {
+	v := newVault(t)
+	n, _ := v.Create("", "收藏测试", "# 收藏测试\n\n正文。\n")
+	raw := "---\nid: " + n.ID + "\ntitle: 收藏测试\naliases:\n  - 曾用名\n---\n\n# 收藏测试\n\n正文。\n"
+	if err := os.WriteFile(n.Path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := v.SetTags(n.Path, []string{"工作"}); err != nil {
+		t.Fatalf("SetTags: %v", err)
+	}
+	after, _ := os.ReadFile(n.Path)
+	if !strings.Contains(string(after), "曾用名") {
+		t.Errorf("tag edit dropped an unknown key:\n%s", after)
+	}
+	if !strings.Contains(string(after), "工作") {
+		t.Errorf("tag edit did not apply:\n%s", after)
+	}
+}
+
+// A body that opens with a thematic break is prose, not a header. Reading it
+// as front matter used to delete everything above the next `---` on save.
+func TestSaveKeepsBodyThatStartsWithThematicBreak(t *testing.T) {
+	v := newVault(t)
+	n, _ := v.Create("", "分割线", "")
+	body := "---\n\n第一段不能消失。\n\n---\n\n第二段。\n"
+	if err := os.WriteFile(n.Path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	read, err := v.Read(n.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(read.Content, "第一段不能消失。") {
+		t.Fatalf("reading already lost the first section: %q", read.Content)
+	}
+
+	saved, err := v.Save(n.Path, read.Content)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	after, _ := os.ReadFile(saved.Path)
+	if !strings.Contains(string(after), "第一段不能消失。") {
+		t.Errorf("save ate the first section:\n%s", after)
+	}
+	if !strings.Contains(string(after), "第二段。") {
+		t.Errorf("save ate the second section:\n%s", after)
+	}
+}
+
+// A header we cannot decode must stop the write. Rewriting it would silently
+// replace values we failed to understand.
+func TestSaveRefusesUndecodableFrontMatter(t *testing.T) {
+	v := newVault(t)
+	n, _ := v.Create("", "坏头部", "")
+	raw := "---\nid: " + n.ID + "\ntags: 这是字符串不是列表\n---\n\n# 坏头部\n\n正文。\n"
+	if err := os.WriteFile(n.Path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := v.Save(n.Path, "# 坏头部\n\n新正文。\n"); err == nil {
+		t.Fatal("Save should refuse a front matter block it cannot decode")
+	}
+	after, _ := os.ReadFile(n.Path)
+	if string(after) != raw {
+		t.Errorf("the file was modified despite the error:\n%s", after)
+	}
+
+	// The note still has to be readable, or a single bad key would hide it.
+	if _, err := v.Read(n.Path); err != nil {
+		t.Errorf("Read: %v", err)
+	}
+}
+
+// Deleting a folder has to be recoverable in full: the dialog promises it, and
+// attachments are not disposable just because they are not Markdown.
+func TestDeleteFolderKeepsAttachments(t *testing.T) {
+	v := newVault(t)
+	if _, err := v.Create("资料", "会议记录", "# 会议记录\n\n内容。\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Create("资料/存档", "旧笔记", "# 旧笔记\n"); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(v.Root(), "资料")
+	if err := os.WriteFile(filepath.Join(dir, "示意图.png"), []byte("png-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "预算.xlsx"), []byte("xlsx-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	item, err := v.DeleteFolder("资料")
+	if err != nil {
+		t.Fatalf("DeleteFolder: %v", err)
+	}
+	if item.Kind != TrashFolder {
+		t.Errorf("kind = %q, want %q", item.Kind, TrashFolder)
+	}
+	if item.Notes != 2 || item.Files != 2 {
+		t.Errorf("counted %d notes and %d files, want 2 and 2", item.Notes, item.Files)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Error("the folder should be gone from the vault tree")
+	}
+
+	items, _ := v.ListTrash()
+	if len(items) != 1 {
+		t.Fatalf("trash holds %d entries, want one folder entry", len(items))
+	}
+
+	restored, err := v.Restore(item.ID)
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if restored.Kind != TrashFolder || restored.Folder != "资料" {
+		t.Errorf("restored = %+v, want the 资料 folder", restored)
+	}
+	for _, name := range []string{"示意图.png", "预算.xlsx"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s did not come back: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "存档", "旧笔记.md")); err != nil {
+		t.Errorf("the nested note did not come back: %v", err)
+	}
+}
+
+// The sidebar count and the list a folder opens have to agree.
+func TestFolderCountsIncludeSubfolders(t *testing.T) {
+	v := newVault(t)
+	if _, err := v.Create("工作", "顶层", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Create("工作/2026", "子一", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Create("工作/2026", "子二", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	folders, err := v.Folders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, f := range folders {
+		got[f.Path] = f.Count
+	}
+	if got["工作"] != 3 {
+		t.Errorf("工作 counts %d notes, want 3 including subfolders", got["工作"])
+	}
+	if got["工作/2026"] != 2 {
+		t.Errorf("工作/2026 counts %d notes, want 2", got["工作/2026"])
 	}
 }
 

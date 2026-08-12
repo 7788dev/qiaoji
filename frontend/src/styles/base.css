@@ -29,9 +29,15 @@ body {
   cursor: default;
 }
 
-/* Interface scale from settings. `zoom` is used rather than a transform
-   because it participates in layout, so scaled panels still fill the window
-   and hit-testing stays correct. */
+/* Interface scale from settings.
+
+   `zoom` rather than a transform, because it participates in layout: scaled
+   panels still fill the window and hit-testing stays correct.
+
+   It cannot live on <html>. Chromium ignores zoom on the document element, so
+   putting it there makes the whole setting do nothing. Dialogs, menus and
+   toasts are appended to <body>, outside this element, and carry the same zoom
+   themselves — see .modal, .menu and .toast in components.css. */
 #app {
   height: 100%;
   zoom: var(--ui-scale, 1);

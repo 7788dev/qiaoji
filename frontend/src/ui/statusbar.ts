@@ -1,8 +1,8 @@
 import * as actions from "../actions";
-import { el, icon } from "../lib/dom";
+import { debounce, el, icon } from "../lib/dom";
 import { countWords, readingTime, tagColor } from "../lib/format";
 import { activeTab, isDirty, state, subscribe } from "../store";
-import { showMenu } from "./menu";
+import { anchorRect, showMenu } from "./menu";
 import { prompt } from "./modal";
 
 export interface StatusbarHandlers {
@@ -31,7 +31,13 @@ export function createStatusbar(handlers: StatusbarHandlers): Statusbar {
     type: "button",
     title: "编辑标签",
   });
-  const save = el("span", { class: "statusbar__save statusbar__item" });
+  // Only the save state is announced. With role="status" on the whole bar, a
+  // screen reader read out the line and column on every caret movement.
+  const save = el("span", {
+    class: "statusbar__save statusbar__item",
+    role: "status",
+    "aria-live": "polite",
+  });
 
   const editButton = el(
     "button",
@@ -59,7 +65,7 @@ export function createStatusbar(handlers: StatusbarHandlers): Statusbar {
 
   const root = el(
     "footer",
-    { class: "statusbar", role: "status" },
+    { class: "statusbar" },
     cursor,
     words,
     reading,
@@ -85,17 +91,34 @@ export function createStatusbar(handlers: StatusbarHandlers): Statusbar {
       : `行 ${line}，列 ${column}`;
   }
 
+  /**
+   * The last counted buffer and its result.
+   *
+   * Counting scans the whole document, and it used to run twice per keystroke
+   * plus once per caret move. Nobody reads a word count mid-keystroke, so it
+   * is computed once per settled buffer and reused for everything else.
+   */
+  let countedText: string | null = null;
+  let countedWords = 0;
+
   function paintCounts(): void {
     const tab = activeTab();
     if (!tab) {
+      countedText = null;
       words.textContent = "";
       reading.textContent = "";
       return;
     }
-    const total = countWords(tab.content);
-    words.textContent = `${total} 字`;
-    reading.textContent = total > 0 ? readingTime(total) : "";
+    if (tab.content !== countedText) {
+      countedText = tab.content;
+      countedWords = countWords(tab.content);
+    }
+    words.textContent = `${countedWords} 字`;
+    reading.textContent = countedWords > 0 ? readingTime(countedWords) : "";
   }
+
+  /** Typing re-arms this, so a burst of keystrokes counts once at the end. */
+  const paintCountsSoon = debounce(paintCounts, 220);
 
   function paintTags(): void {
     const tab = activeTab();
@@ -145,7 +168,7 @@ export function createStatusbar(handlers: StatusbarHandlers): Statusbar {
   tags.addEventListener("click", () => {
     const tab = activeTab();
     if (!tab) return;
-    const rect = tags.getBoundingClientRect();
+    const rect = anchorRect(tags);
 
     const existing = state.tags.filter((t) => !tab.tags.includes(t.name));
     showMenu(
@@ -188,6 +211,9 @@ export function createStatusbar(handlers: StatusbarHandlers): Statusbar {
 
   subscribe(["activeTabId", "tabs"], paintAll);
   subscribe(["saveState"], paintSave);
+  // Only the counts follow the live buffer; the save indicator is driven by
+  // saveState, which markDirty already publishes when the state actually moves.
+  subscribe(["docRevision"], paintCountsSoon);
   paintAll();
 
   return {
@@ -197,7 +223,6 @@ export function createStatusbar(handlers: StatusbarHandlers): Statusbar {
       column = nextColumn;
       selected = nextSelected;
       paintCursor();
-      paintCounts();
     },
   };
 }

@@ -29,14 +29,28 @@ export interface Tag {
   count: number;
 }
 
+export type TrashKind = "note" | "folder";
+
 export interface TrashItem {
   id: string;
+  kind: TrashKind;
   title: string;
   folder: string;
   excerpt: string;
   deletedAt: string;
   originalRel: string;
   size: number;
+  /** Folder entries: how many notes and other files went in with it. */
+  notes: number;
+  files: number;
+}
+
+/** What came back out of the trash: one note, or a whole folder. */
+export interface Restored {
+  kind: TrashKind;
+  note: Note;
+  folder: string;
+  notes: number;
 }
 
 export interface SearchHit {
@@ -103,6 +117,13 @@ export interface Stats {
   tags: number;
   trash: number;
   bytes: number;
+}
+
+/** Folders, tags and totals in one round trip, refreshed as a unit. */
+export interface SidebarData {
+  folders: Folder[];
+  tags: Tag[];
+  stats: Stats;
 }
 
 export interface BootstrapPayload {

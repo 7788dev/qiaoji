@@ -174,9 +174,6 @@ export function openSettings(deps: SettingsDeps, initial: SectionId = "general")
       toggle("关闭时最小化到托盘", "点击关闭按钮时保持后台运行", s.closeToTray, (v) =>
         update({ closeToTray: v }),
       ),
-      toggle("自动检查更新", "启动时在后台检查新版本", s.autoUpdate, (v) =>
-        update({ autoUpdate: v }),
-      ),
       toggle(
         "硬件加速",
         "关闭后改用软件渲染。只有在界面出现黑块或文字撕裂时才需要关闭，重启后生效。",
@@ -583,7 +580,7 @@ const SHORTCUTS: { group: string; items: [string, string][] }[] = [
       ["新建笔记", "Ctrl + N"],
       ["打开笔记", "Ctrl + O"],
       ["保存", "Ctrl + S"],
-      ["导出", "Ctrl + E"],
+      ["导出", "Ctrl + Shift + E"],
       ["关闭标签", "Ctrl + W"],
     ],
   },

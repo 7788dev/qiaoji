@@ -205,7 +205,7 @@ export function createTabbar(handlers: TabbarHandlers): HTMLElement {
         {
           class: "ibtn",
           type: "button",
-          title: "导出  Ctrl+E",
+          title: "导出  Ctrl+Shift+E",
           "aria-label": "导出",
           onclick: handlers.openExport,
         },
@@ -214,18 +214,44 @@ export function createTabbar(handlers: TabbarHandlers): HTMLElement {
     ),
   );
 
-  function renderTab(tab: Tab): HTMLElement {
-    const active = tab.id === state.activeTabId;
-    const dirty = isDirty(tab);
-    const title = actions.tabTitle(tab);
+  /**
+   * One tab's nodes, kept so a repaint writes text instead of rebuilding.
+   *
+   * Every tab used to be recreated — five listeners and two inline SVGs each —
+   * whenever anything about the tabs changed, which included every keystroke.
+   */
+  interface TabNode {
+    root: HTMLElement;
+    dot: HTMLElement;
+    label: HTMLElement;
+    close: HTMLElement;
+    title: string;
+  }
 
-    const node = el(
+  const tabNodes = new Map<string, TabNode>();
+
+  function renderTab(tab: Tab): TabNode {
+    const dot = el("span", { class: "tab__dot", title: "未保存" });
+    const label = el("span", { class: "tab__label" });
+    const close = el(
+      "button",
+      {
+        class: "tab__close",
+        type: "button",
+        title: "关闭  Ctrl+W",
+        onclick: (ev: MouseEvent) => {
+          ev.stopPropagation();
+          void actions.closeTab(tab.id);
+        },
+      },
+      icon("close", 11),
+    );
+
+    const root = el(
       "div",
       {
-        class: `tab${active ? " is-active" : ""}`,
+        class: "tab",
         role: "tab",
-        "aria-selected": active ? "true" : "false",
-        title,
         tabIndex: 0,
         onclick: () => actions.activateTab(tab.id),
         onkeydown: (ev: KeyboardEvent) => {
@@ -256,39 +282,72 @@ export function createTabbar(handlers: TabbarHandlers): HTMLElement {
               {
                 label: "在资源管理器中显示",
                 icon: "folderOpen",
-                run: () => void api.revealInExplorer(tab.path),
+                run: () => {
+                  // Looked up now, not captured: saving a note whose heading
+                  // changed renames the file, and this node outlives that.
+                  const current = state.tabs.find((t) => t.id === tab.id);
+                  if (current) void api.revealInExplorer(current.path);
+                },
               },
             ],
             { x: ev.clientX, y: ev.clientY },
           );
         },
       },
-      dirty ? el("span", { class: "tab__dot", title: "未保存" }) : null,
-      el("span", { class: "tab__label" }, title),
-      el(
-        "button",
-        {
-          class: "tab__close",
-          type: "button",
-          title: "关闭  Ctrl+W",
-          "aria-label": `关闭 ${title}`,
-          onclick: (ev: MouseEvent) => {
-            ev.stopPropagation();
-            void actions.closeTab(tab.id);
-          },
-        },
-        icon("close", 11),
-      ),
+      dot,
+      label,
+      close,
     );
-    return node;
+
+    return { root, dot, label, close, title: "" };
   }
 
-  function paint(): void {
-    strip.replaceChildren(...state.tabs.map(renderTab));
-    const active = strip.querySelector<HTMLElement>(".tab.is-active");
-    active?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  /** Writes one tab's changeable parts, skipping the text when it is unchanged. */
+  function paintTab(tab: Tab, node: TabNode): void {
+    const active = tab.id === state.activeTabId;
+    node.root.classList.toggle("is-active", active);
+    node.root.setAttribute("aria-selected", active ? "true" : "false");
+    node.dot.hidden = !isDirty(tab);
+
+    const title = actions.tabTitle(tab);
+    if (title === node.title) return;
+    node.title = title;
+    node.label.textContent = title;
+    node.root.title = title;
+    node.close.setAttribute("aria-label", `关闭 ${title}`);
+  }
+
+  let lastActiveId: string | null = null;
+
+  /** Reconciles the strip with the open tabs, reusing every node it can. */
+  function syncTabs(): void {
+    for (const [id, node] of tabNodes) {
+      if (state.tabs.some((t) => t.id === id)) continue;
+      node.root.remove();
+      tabNodes.delete(id);
+    }
+
+    let previous: Element | null = null;
+    for (const tab of state.tabs) {
+      let node = tabNodes.get(tab.id);
+      if (!node) {
+        node = renderTab(tab);
+        tabNodes.set(tab.id, node);
+      }
+      const slot: Element | null = previous
+        ? previous.nextElementSibling
+        : strip.firstElementChild;
+      if (slot !== node.root) strip.insertBefore(node.root, slot);
+      previous = node.root;
+      paintTab(tab, node);
+    }
 
     const tab = state.tabs.find((t) => t.id === state.activeTabId);
+    if (tab && tab.id !== lastActiveId) {
+      tabNodes.get(tab.id)?.root.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    lastActiveId = tab?.id ?? null;
+
     const previewing = tab?.mode === "preview";
     modeButton.replaceChildren(icon(previewing ? "pencil" : "eye", 15));
     modeButton.title = previewing ? "编辑  Ctrl+P" : "预览  Ctrl+P";
@@ -297,8 +356,17 @@ export function createTabbar(handlers: TabbarHandlers): HTMLElement {
     outlineButton.disabled = !tab;
   }
 
-  subscribe(["tabs", "activeTabId"], paint);
-  paint();
+  /** Typing only ever changes the tab being typed into. */
+  function paintActiveTab(): void {
+    const tab = state.tabs.find((t) => t.id === state.activeTabId);
+    if (!tab) return;
+    const node = tabNodes.get(tab.id);
+    if (node) paintTab(tab, node);
+  }
+
+  subscribe(["tabs", "activeTabId"], syncTabs);
+  subscribe(["docRevision"], paintActiveTab);
+  syncTabs();
 
   return bar;
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"time"
 
@@ -17,20 +18,29 @@ type frontMatter struct {
 	Created  time.Time `yaml:"created,omitempty"`
 	Updated  time.Time `yaml:"updated,omitempty"`
 	Favorite bool      `yaml:"favorite,omitempty"`
+
+	// Extra carries every key we do not model. Obsidian's `aliases` and
+	// `cssclass`, publishing flags and per-vault custom fields all land here
+	// and are written back verbatim, so a note stays whatever its author made
+	// it even after we rewrite the header.
+	Extra map[string]yaml.Node `yaml:",inline"`
 }
 
-var fmDelim = []byte("---")
+var (
+	fmDelim = []byte("---")
+	utf8BOM = []byte("\xef\xbb\xbf")
+)
 
 // splitFrontMatter returns the raw YAML block (without delimiters) and the
-// Markdown body. A file with no front matter is all body.
-func splitFrontMatter(raw []byte) (yamlPart, body []byte) {
-	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf")) // strip UTF-8 BOM
+// Markdown body. A file with no delimited block is all body.
+func splitFrontMatter(raw []byte) (yamlPart, body []byte, ok bool) {
+	raw = bytes.TrimPrefix(raw, utf8BOM)
 	if !bytes.HasPrefix(raw, fmDelim) {
-		return nil, raw
+		return nil, raw, false
 	}
 	rest := raw[len(fmDelim):]
 	if len(rest) == 0 || (rest[0] != '\n' && rest[0] != '\r') {
-		return nil, raw
+		return nil, raw, false
 	}
 	rest = trimLeadingNewline(rest)
 
@@ -47,16 +57,16 @@ func splitFrontMatter(raw []byte) (yamlPart, body []byte) {
 		trimmed := bytes.TrimRight(line, "\r \t")
 		if string(trimmed) == "---" || string(trimmed) == "..." {
 			if lineEnd < 0 {
-				return rest[:idx], nil
+				return rest[:idx], nil, true
 			}
-			return rest[:idx], trimLeadingNewline(rest[idx+lineEnd+1:])
+			return rest[:idx], trimLeadingNewline(rest[idx+lineEnd+1:]), true
 		}
 		if lineEnd < 0 {
 			break
 		}
 		idx += lineEnd + 1
 	}
-	return nil, raw
+	return nil, raw, false
 }
 
 func trimLeadingNewline(b []byte) []byte {
@@ -69,13 +79,39 @@ func trimLeadingNewline(b []byte) []byte {
 	return b
 }
 
-func parseFrontMatter(raw []byte) (frontMatter, string) {
-	yamlPart, body := splitFrontMatter(raw)
+// parseFrontMatter splits a note file into its header and body.
+//
+// A delimited block only counts as front matter when it is a YAML mapping. A
+// note whose body opens with a `---` thematic break would otherwise lose
+// everything above the next `---` the first time we rewrote the file.
+//
+// A block that is a mapping but holds a value we cannot decode (say
+// `tags: 工作` where a list belongs) returns an error alongside whatever did
+// decode. Reads tolerate that so the note still lists; writes must not, or the
+// unreadable keys would be dropped on the way back to disk.
+func parseFrontMatter(raw []byte) (frontMatter, string, error) {
+	yamlPart, body, ok := splitFrontMatter(raw)
 	var fm frontMatter
-	if len(yamlPart) > 0 {
-		_ = yaml.Unmarshal(yamlPart, &fm)
+	if !ok {
+		return fm, string(body), nil
 	}
-	return fm, string(body)
+	if len(bytes.TrimSpace(yamlPart)) == 0 {
+		return fm, string(body), nil
+	}
+
+	whole := string(bytes.TrimPrefix(raw, utf8BOM))
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(yamlPart, &doc); err != nil {
+		return frontMatter{}, whole, nil
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return frontMatter{}, whole, nil
+	}
+	if err := doc.Content[0].Decode(&fm); err != nil {
+		return fm, string(body), fmt.Errorf("YAML 头部无法解析: %w", err)
+	}
+	return fm, string(body), nil
 }
 
 func renderFile(fm frontMatter, body string) []byte {
@@ -86,8 +122,10 @@ func renderFile(fm frontMatter, body string) []byte {
 	_ = enc.Encode(fm)
 	_ = enc.Close()
 	buf.WriteString("---\n\n")
-	buf.WriteString(strings.TrimLeft(body, "\n"))
-	if !strings.HasSuffix(body, "\n") {
+
+	text := strings.TrimLeft(body, "\n")
+	buf.WriteString(text)
+	if text != "" && !strings.HasSuffix(text, "\n") {
 		buf.WriteString("\n")
 	}
 	return buf.Bytes()

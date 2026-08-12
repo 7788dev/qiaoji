@@ -67,21 +67,46 @@ export function fileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// Hoisted and applied only to characters outside the ASCII fast path. Building
+// a fresh regex and a one-character string per code point made this the most
+// expensive thing on the typing path for a long note.
+const WORD_CHAR = /[\p{L}\p{N}]/u;
+
 export function countWords(text: string): number {
   let count = 0;
   let inWord = false;
-  for (const ch of text) {
-    const code = ch.codePointAt(0) ?? 0;
-    if (isCJK(code)) {
+
+  for (let i = 0; i < text.length; i++) {
+    let code = text.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+      const low = text.charCodeAt(i + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        code = text.codePointAt(i) ?? code;
+        i++; // the low surrogate belongs to the code point just read
+      }
+    }
+
+    let word: boolean;
+    if (code < 128) {
+      word =
+        (code >= 48 && code <= 57) ||
+        (code >= 65 && code <= 90) ||
+        (code >= 97 && code <= 122);
+    } else if (isCJK(code)) {
       count++;
       inWord = false;
-    } else if (/[\p{L}\p{N}]/u.test(ch)) {
-      if (!inWord) {
-        count++;
-        inWord = true;
-      }
+      continue;
     } else {
+      word = WORD_CHAR.test(String.fromCodePoint(code));
+    }
+
+    if (!word) {
       inWord = false;
+      continue;
+    }
+    if (!inWord) {
+      count++;
+      inWord = true;
     }
   }
   return count;

@@ -25,6 +25,11 @@ type Watcher struct {
 	timer   *time.Timer
 	closed  bool
 	stopped chan struct{}
+
+	// running tracks callbacks that have already started, and gen retires the
+	// ones a newer event superseded.
+	running sync.WaitGroup
+	gen     uint64
 }
 
 func New(root string, debounce time.Duration, onChange func()) (*Watcher, error) {
@@ -125,27 +130,29 @@ func (w *Watcher) schedule() {
 	if w.timer != nil {
 		w.timer.Stop()
 	}
+	w.gen++
+	gen := w.gen
 	w.timer = time.AfterFunc(w.debounce, func() {
 		w.mu.Lock()
-		closed := w.closed
-		w.mu.Unlock()
-		if !closed && w.onChange != nil {
-			w.onChange()
+		// Stop cannot cancel a callback that has already begun, so a
+		// superseded one bows out here instead of running a second scan
+		// alongside the current one.
+		if w.closed || gen != w.gen || w.onChange == nil {
+			w.mu.Unlock()
+			return
 		}
+		w.running.Add(1)
+		w.mu.Unlock()
+
+		defer w.running.Done()
+		w.onChange()
 	})
 }
 
-// Pause suppresses callbacks while the app itself is writing, so our own saves
-// do not bounce back as external changes.
-func (w *Watcher) Pause() {
-	w.mu.Lock()
-	if w.timer != nil {
-		w.timer.Stop()
-		w.timer = nil
-	}
-	w.mu.Unlock()
-}
-
+// Close stops watching and waits for any callback that already started.
+//
+// The wait matters: the callback reindexes the vault, and returning while it
+// runs would let the caller close the index out from under it.
 func (w *Watcher) Close() error {
 	w.mu.Lock()
 	if w.closed {
@@ -155,9 +162,12 @@ func (w *Watcher) Close() error {
 	w.closed = true
 	if w.timer != nil {
 		w.timer.Stop()
+		w.timer = nil
 	}
 	w.mu.Unlock()
+
 	err := w.w.Close()
 	<-w.stopped
+	w.running.Wait()
 	return err
 }

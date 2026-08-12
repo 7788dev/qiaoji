@@ -85,8 +85,14 @@ export function openTagsDialog(): void {
             {
               class: "spacer truncate",
               type: "button",
+              title: `筛选「${tag.name}」`,
               style: { textAlign: "left", color: "var(--fg)" },
-              onclick: () => actions.selectScope("tag", tag.name),
+              onclick: () => {
+                // Closing first, or the scope changes behind the scrim and the
+                // dialog sits over a list the user cannot see.
+                handle.close();
+                actions.selectScope("tag", tag.name);
+              },
             },
             tag.name,
           ),
@@ -138,7 +144,7 @@ export function openTagsDialog(): void {
   const unsubscribe = subscribe(["tags"], paint);
   paint();
 
-  openModal({
+  const handle = openModal({
     title: "标签管理",
     width: 520,
     body,

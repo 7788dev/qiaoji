@@ -143,7 +143,7 @@ export function createSidebar(handlers: SidebarHandlers): HTMLElement {
                   run: async () => {
                     const ok = await confirm({
                       title: "删除文件夹",
-                      message: `「${folder.name}」中的 ${folder.count} 篇笔记会移入回收站，可以随时还原。`,
+                      message: `「${folder.name}」会整个移入回收站，其中的 ${folder.count} 篇笔记和所有附件都可以随时还原。`,
                       confirmLabel: "删除",
                       danger: true,
                     });

@@ -1,11 +1,11 @@
 import * as actions from "../actions";
 import * as api from "../api";
-import { el, icon, on } from "../lib/dom";
+import { el, icon } from "../lib/dom";
 import { fullTime, relativeTime } from "../lib/format";
 import { VirtualList } from "../lib/virtual";
 import { currentScopeLabel, state, subscribe } from "../store";
-import type { NoteMeta, SearchHit, SortBy } from "../types";
-import { showMenu } from "./menu";
+import type { NoteMeta, SearchHit, SortBy, TrashItem } from "../types";
+import { anchorRect, showMenu } from "./menu";
 import { confirm, prompt } from "./modal";
 
 // Rows are a fixed height so the list can be virtualised. The values below are
@@ -78,7 +78,7 @@ export function createNoteList(): HTMLElement {
   });
   sortButton.appendChild(icon("sort", 14));
   sortButton.addEventListener("click", () => {
-    const rect = sortButton.getBoundingClientRect();
+    const rect = anchorRect(sortButton);
     showMenu(
       (Object.keys(SORT_LABELS) as SortBy[]).map((key) => ({
         label: SORT_LABELS[key],
@@ -97,7 +97,12 @@ export function createNoteList(): HTMLElement {
     onclick: () => actions.setListView(state.listView === "list" ? "grid" : "list"),
   });
 
-  const scroller = el("div", { class: "notelist__scroll scroll" });
+  // The rows carry role="option", which is only meaningful inside a listbox.
+  const scroller = el("div", {
+    class: "notelist__scroll scroll",
+    role: "listbox",
+    "aria-label": "笔记",
+  });
 
   const root = el(
     "section",
@@ -367,6 +372,16 @@ export function createNoteList(): HTMLElement {
   /* ------------------------------------------------------------ empty states */
 
   function emptyState(): HTMLElement | null {
+    // A first load or a scope switch on a slow drive used to show nothing at
+    // all: no rows, no message, just an empty column.
+    if (state.loadingList && state.notes.length === 0 && state.searchHits === null) {
+      return el(
+        "div",
+        { class: "empty" },
+        el("div", { class: "empty__icon" }, el("span", { class: "spinner" })),
+        el("div", { class: "empty__title" }, "正在读取笔记…"),
+      );
+    }
     if (state.loadingList) return null;
     if (state.searchHits !== null) {
       if (state.searchHits.length > 0) return null;
@@ -443,6 +458,25 @@ export function createNoteList(): HTMLElement {
       list.setRowHeight(ROW_HEIGHT, 0);
     }
     list.setItems(rows, { preserveScroll });
+    paintActiveRow();
+  }
+
+  /**
+   * Marks the row of the note that is open.
+   *
+   * This used to rebuild every visible row, which meant a dozen row subtrees
+   * and their listeners were thrown away and recreated whenever a tab changed
+   * — including once per keystroke. Toggling two classes does the same job and
+   * keeps focus and in-progress drags on the rows that already exist.
+   */
+  function paintActiveRow(): void {
+    const tab = state.tabs.find((t) => t.id === state.activeTabId);
+    const path = tab?.path ?? "";
+    scroller.querySelectorAll<HTMLElement>("[data-path]").forEach((node) => {
+      const active = node.dataset.path === path;
+      node.classList.toggle("is-active", active);
+      node.setAttribute("aria-selected", active ? "true" : "false");
+    });
   }
 
   subscribe(["notes", "searchHits", "listView", "loadingList"], () => {
@@ -450,13 +484,20 @@ export function createNoteList(): HTMLElement {
     paintRows(false);
   });
   subscribe(["scope", "scopeValue", "sortBy"], paintHeader);
-  subscribe(["activeTabId", "tabs"], () => list.refresh());
+  subscribe(["activeTabId", "tabs"], paintActiveRow);
 
-  on(window, "resize", () => {
+  // The card count depends on the width of the list column, which changes when
+  // a panel is toggled as well as when the window is resized. Watching the
+  // element covers both; watching the window left the grid at a stale column
+  // count until the window itself moved.
+  const columnObserver = new ResizeObserver(() => {
     if (state.listView !== "grid") return;
-    gridColumns = columnsForWidth();
-    list.setColumns(gridColumns);
+    const columns = columnsForWidth();
+    if (columns === gridColumns) return;
+    gridColumns = columns;
+    list.setColumns(columns);
   });
+  columnObserver.observe(scroller);
 
   paintHeader();
   paintRows(false);
@@ -482,19 +523,21 @@ export function renderTrashList(container: HTMLElement, onChanged: () => void): 
   }
 
   container.replaceChildren(
-    ...state.trash.map((item) =>
-      el(
+    ...state.trash.map((item) => {
+      const isFolder = item.kind === "folder";
+      return el(
         "div",
         { class: "list-row" },
         el(
           "div",
           { class: "spacer" },
-          el("div", { class: "note-row__title" }, item.title || "未命名笔记"),
           el(
             "div",
-            { class: "note-row__excerpt" },
-            item.excerpt || "空白笔记",
+            { class: "note-row__title" },
+            isFolder ? icon("folder", 14) : null,
+            item.title || (isFolder ? "未命名文件夹" : "未命名笔记"),
           ),
+          el("div", { class: "note-row__excerpt" }, trashSummary(item)),
           el(
             "div",
             { class: "note-row__meta" },
@@ -527,7 +570,9 @@ export function renderTrashList(container: HTMLElement, onChanged: () => void): 
               onclick: async () => {
                 const ok = await confirm({
                   title: "彻底删除",
-                  message: `「${item.title}」将被永久删除，此操作无法撤销。`,
+                  message: isFolder
+                    ? `文件夹「${item.title}」及其中的全部内容将被永久删除，此操作无法撤销。`
+                    : `「${item.title}」将被永久删除，此操作无法撤销。`,
                   confirmLabel: "永久删除",
                   danger: true,
                 });
@@ -539,7 +584,15 @@ export function renderTrashList(container: HTMLElement, onChanged: () => void): 
             icon("trash", 14),
           ),
         ),
-      ),
-    ),
+      );
+    }),
   );
+}
+
+/** One line describing what a trash entry holds. */
+function trashSummary(item: TrashItem): string {
+  if (item.kind !== "folder") return item.excerpt || "空白笔记";
+  const parts = [`${item.notes} 篇笔记`];
+  if (item.files > 0) parts.push(`${item.files} 个附件`);
+  return `文件夹 · ${parts.join(" · ")}`;
 }

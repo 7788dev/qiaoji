@@ -5,6 +5,7 @@ package index
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -152,25 +153,43 @@ func (ix *Index) Sync(v *store.Vault) (changed int, err error) {
 		return 0, nil
 	}
 
-	notes := make([]store.Note, 0, len(stale))
-	for _, p := range stale {
-		n, err := v.Read(p)
-		if err != nil {
-			continue
+	// Notes are read and committed in batches. Loading a whole vault into one
+	// slice made peak memory equal to the total size of every changed note,
+	// which is exactly the first-run and bulk-import case.
+	for start := 0; start < len(stale); start += syncBatch {
+		end := start + syncBatch
+		if end > len(stale) {
+			end = len(stale)
 		}
-		notes = append(notes, n)
-	}
-
-	if err := ix.upsertBatch(notes); err != nil {
-		return 0, err
+		notes := make([]store.Note, 0, end-start)
+		for _, p := range stale[start:end] {
+			n, err := v.Read(p)
+			if err != nil {
+				continue
+			}
+			notes = append(notes, n)
+		}
+		if err := ix.upsert(notes, true); err != nil {
+			return changed, err
+		}
+		changed += len(notes)
 	}
 	if err := ix.removePaths(gone); err != nil {
-		return 0, err
+		return changed, err
 	}
-	return len(notes) + len(gone), nil
+	return changed + len(gone), nil
 }
 
-func (ix *Index) upsertBatch(notes []store.Note) error {
+// syncBatch bounds how many note bodies are held in memory at once.
+const syncBatch = 200
+
+// upsert writes notes into the index.
+//
+// onlyIfNewer guards the sync path. Syncing reads a file from disk and writes
+// it back a moment later; a save that lands in that window would otherwise be
+// overwritten by the copy the walk had already read, leaving the index showing
+// text the note no longer has.
+func (ix *Index) upsert(notes []store.Note, onlyIfNewer bool) error {
 	if len(notes) == 0 {
 		return nil
 	}
@@ -183,23 +202,34 @@ func (ix *Index) upsertBatch(notes []store.Note) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`
+	sqlText := `
 		INSERT INTO notes(id, path, title, folder, tags, created, updated, favorite, excerpt, words, size, mtime, content)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(path) DO UPDATE SET
 		  id=excluded.id, title=excluded.title, folder=excluded.folder, tags=excluded.tags,
 		  created=excluded.created, updated=excluded.updated, favorite=excluded.favorite,
 		  excerpt=excluded.excerpt, words=excluded.words, size=excluded.size,
-		  mtime=excluded.mtime, content=excluded.content`)
+		  mtime=excluded.mtime, content=excluded.content`
+	if onlyIfNewer {
+		sqlText += ` WHERE excluded.mtime >= notes.mtime`
+	}
+
+	stmt, err := tx.Prepare(sqlText)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
+	// A duplicated id (copied file) would break the unique index, so the path
+	// always wins and the clash gets a fresh surrogate.
+	dedupe, err := tx.Prepare(`DELETE FROM notes WHERE id = ? AND path <> ?`)
+	if err != nil {
+		return err
+	}
+	defer dedupe.Close()
+
 	for _, n := range notes {
-		// A duplicated id (copied file) would break the unique index, so the
-		// path always wins and the clash gets a fresh surrogate.
-		if _, err := tx.Exec(`DELETE FROM notes WHERE id = ? AND path <> ?`, n.ID, n.Path); err != nil {
+		if _, err := dedupe.Exec(n.ID, n.Path); err != nil {
 			return err
 		}
 		fav := 0
@@ -217,8 +247,9 @@ func (ix *Index) upsertBatch(notes []store.Note) error {
 	return tx.Commit()
 }
 
-// Upsert indexes a single note right after it was saved.
-func (ix *Index) Upsert(n store.Note) error { return ix.upsertBatch([]store.Note{n}) }
+// Upsert indexes a single note right after it was saved. The caller has the
+// authoritative copy, so this always wins.
+func (ix *Index) Upsert(n store.Note) error { return ix.upsert([]store.Note{n}, false) }
 
 func (ix *Index) removePaths(paths []string) error {
 	if len(paths) == 0 {
@@ -241,6 +272,24 @@ func (ix *Index) removePaths(paths []string) error {
 
 func (ix *Index) Remove(path string) error { return ix.removePaths([]string{path}) }
 
+// RemoveUnder drops every note in a folder and its subfolders.
+//
+// Folder deletes and renames used to throw the whole index away and re-read
+// the vault from disk; scoping the change to the affected subtree keeps the
+// cost proportional to what actually moved.
+func (ix *Index) RemoveUnder(folder string) error {
+	folder = strings.Trim(strings.TrimSpace(folder), "/")
+	if folder == "" {
+		return nil
+	}
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	_, err := ix.db.Exec(
+		`DELETE FROM notes WHERE folder = ? OR folder LIKE ? ESCAPE '\'`,
+		folder, escapeLike(folder)+`/%`)
+	return err
+}
+
 // ---------------------------------------------------------------- queries
 
 // Query describes one list request from the sidebar.
@@ -260,12 +309,21 @@ func (ix *Index) List(q Query) ([]store.Meta, error) {
 		where = append(where, "favorite = 1")
 	case "folder":
 		if q.Value != "" {
-			where = append(where, "(folder = ? OR folder LIKE ?)")
-			args = append(args, q.Value, q.Value+"/%")
+			where = append(where, `(folder = ? OR folder LIKE ? ESCAPE '\')`)
+			args = append(args, q.Value, escapeLike(q.Value)+"/%")
 		}
 	case "tag":
-		where = append(where, "(tags = ? OR tags LIKE ? OR tags LIKE ? OR tags LIKE ?)")
-		args = append(args, q.Value, q.Value+"\x1f%", "%\x1f"+q.Value, "%\x1f"+q.Value+"\x1f%")
+		// An empty tag is not a filter for untagged notes; without this guard
+		// the equality below quietly matches every note that has no tags.
+		if q.Value == "" {
+			return []store.Meta{}, nil
+		}
+		// Tags are stored as a unit-separated list, so membership is three
+		// LIKE patterns. Wildcards inside the tag itself have to be escaped or
+		// a tag named "a_b" also matches "axb".
+		esc := escapeLike(q.Value)
+		where = append(where, `(tags = ? OR tags LIKE ? ESCAPE '\' OR tags LIKE ? ESCAPE '\' OR tags LIKE ? ESCAPE '\')`)
+		args = append(args, q.Value, esc+"\x1f%", "%\x1f"+esc, "%\x1f"+esc+"\x1f%")
 	case "untagged":
 		where = append(where, "tags = ''")
 	}
@@ -341,6 +399,27 @@ func (ix *Index) Count() (int, error) {
 	return n, err
 }
 
+// Summary totals the library.
+//
+// The sidebar asks for this after every save, so the numbers are aggregated in
+// SQL. Listing a hundred thousand rows into Go structs just to add up two
+// columns was the single most expensive thing on the write path.
+type Summary struct {
+	Notes int   `json:"notes"`
+	Words int   `json:"words"`
+	Bytes int64 `json:"bytes"`
+}
+
+func (ix *Index) Summary() (Summary, error) {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	var s Summary
+	err := ix.db.QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(words), 0), COALESCE(SUM(size), 0) FROM notes`,
+	).Scan(&s.Notes, &s.Words, &s.Bytes)
+	return s, err
+}
+
 func (ix *Index) Tags() ([]store.Tag, error) {
 	ix.mu.Lock()
 	rows, err := ix.db.Query(`SELECT tags FROM notes WHERE tags <> ''`)
@@ -368,16 +447,14 @@ func (ix *Index) Tags() ([]store.Tag, error) {
 	return out, nil
 }
 
+// sortTags orders by popularity, then by name so the sidebar stays stable.
 func sortTags(t []store.Tag) {
-	for i := 1; i < len(t); i++ {
-		for j := i; j > 0; j-- {
-			a, b := t[j-1], t[j]
-			if a.Count > b.Count || (a.Count == b.Count && a.Name <= b.Name) {
-				break
-			}
-			t[j-1], t[j] = t[j], t[j-1]
+	sort.Slice(t, func(i, j int) bool {
+		if t[i].Count != t[j].Count {
+			return t[i].Count > t[j].Count
 		}
-	}
+		return t[i].Name < t[j].Name
+	})
 }
 
 // PathByID resolves a stable note id to its current file path.

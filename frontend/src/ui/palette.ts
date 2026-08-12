@@ -1,6 +1,6 @@
 import * as actions from "../actions";
 import * as api from "../api";
-import { el, icon, kbd } from "../lib/dom";
+import { debounce, el, icon, kbd } from "../lib/dom";
 import { relativeTime } from "../lib/format";
 import { activeTab, state, subscribe } from "../store";
 import type { NoteMeta } from "../types";
@@ -57,7 +57,7 @@ export function buildCommands(deps: PaletteDeps): Command[] {
       id: "export",
       label: "导出",
       icon: "download",
-      shortcut: "Ctrl+E",
+      shortcut: "Ctrl+Shift+E",
       group: "文件",
       when: hasTab,
       run: deps.openExport,
@@ -249,6 +249,7 @@ export function openPalette(commands: Command[]): ModalHandle {
 
   const list = el("div", { class: "palette__list scroll", role: "listbox" });
   let entries: Entry[] = [];
+  let itemNodes: HTMLElement[] = [];
   let active = 0;
   let requestId = 0;
 
@@ -305,6 +306,7 @@ export function openPalette(commands: Command[]): ModalHandle {
 
   function paint(): void {
     list.replaceChildren();
+    itemNodes = [];
     if (entries.length === 0) {
       list.appendChild(
         el(
@@ -335,7 +337,7 @@ export function openPalette(commands: Command[]): ModalHandle {
                 role: "option",
                 "aria-selected": isActive ? "true" : "false",
                 onclick: () => choose(index),
-                onmousemove: () => setActive(index),
+                onmousemove: () => setActive(index, { scroll: false }),
               },
               el("span", { class: "icon" }, icon(entry.command.icon ?? "chevronRight", 15)),
               el("span", { class: "palette__label" }, entry.command.label),
@@ -349,30 +351,43 @@ export function openPalette(commands: Command[]): ModalHandle {
                 role: "option",
                 "aria-selected": isActive ? "true" : "false",
                 onclick: () => choose(index),
-                onmousemove: () => setActive(index),
+                onmousemove: () => setActive(index, { scroll: false }),
               },
               el("span", { class: "icon" }, icon("note", 15)),
               el("span", { class: "palette__label" }, entry.note.title || "未命名笔记"),
               el("span", { class: "palette__sub" }, relativeTime(entry.note.updated)),
             );
+      itemNodes[index] = node;
       list.appendChild(node);
     });
 
-    list.querySelector<HTMLElement>(".palette__item.is-active")?.scrollIntoView({
-      block: "nearest",
-    });
+    scrollActiveIntoView();
   }
 
-  function setActive(index: number): void {
+  function scrollActiveIntoView(): void {
+    itemNodes[active]?.scrollIntoView({ block: "nearest" });
+  }
+
+  /**
+   * Highlights one entry.
+   *
+   * Hovering must not repaint or scroll: rebuilding the list under the pointer
+   * and then scrolling it moved a different row under the cursor, which fired
+   * the next mousemove and made the list creep on its own.
+   */
+  function setActive(index: number, options: { scroll?: boolean } = {}): void {
     if (index === active) return;
+    itemNodes[active]?.classList.remove("is-active");
+    itemNodes[active]?.setAttribute("aria-selected", "false");
     active = index;
-    paint();
+    itemNodes[active]?.classList.add("is-active");
+    itemNodes[active]?.setAttribute("aria-selected", "true");
+    if (options.scroll !== false) scrollActiveIntoView();
   }
 
   function move(delta: number): void {
     if (entries.length === 0) return;
-    active = (active + delta + entries.length) % entries.length;
-    paint();
+    setActive((active + delta + entries.length) % entries.length);
   }
 
   function choose(index: number): void {
@@ -383,7 +398,11 @@ export function openPalette(commands: Command[]): ModalHandle {
     else void actions.openNote(entry.note);
   }
 
-  input.addEventListener("input", () => void refresh());
+  // Each refresh is an IPC round trip and a LIKE scan of every title, and an
+  // IME composition emits several input events per character.
+  const refreshSoon = debounce(() => void refresh(), 120);
+
+  input.addEventListener("input", () => refreshSoon());
   input.addEventListener("keydown", (ev) => {
     switch (ev.key) {
       case "ArrowDown":
@@ -454,10 +473,23 @@ export function openSearchPanel(): ModalHandle {
 
   const results = el("div", { class: "palette__list scroll", role: "listbox" });
   let active = 0;
+  let hitNodes: HTMLElement[] = [];
+
+  /** Hover highlights without repainting, which would scroll under the pointer. */
+  function setActive(index: number, options: { scroll?: boolean } = {}): void {
+    if (index === active) return;
+    hitNodes[active]?.classList.remove("is-active");
+    hitNodes[active]?.setAttribute("aria-selected", "false");
+    active = index;
+    hitNodes[active]?.classList.add("is-active");
+    hitNodes[active]?.setAttribute("aria-selected", "true");
+    if (options.scroll !== false) hitNodes[active]?.scrollIntoView({ block: "nearest" });
+  }
 
   function paint(): void {
     const hits = state.searchHits ?? [];
     results.replaceChildren();
+    hitNodes = [];
 
     if (state.searching) {
       results.appendChild(
@@ -496,38 +528,33 @@ export function openSearchPanel(): ModalHandle {
       const snippet = el("div", { class: "note-row__excerpt" });
       snippet.innerHTML = hit.snippet;
 
-      results.appendChild(
-        el(
-          "button",
-          {
-            class: `palette__item${index === active ? " is-active" : ""}`,
-            type: "button",
-            role: "option",
-            style: { display: "block", padding: "var(--sp-3) var(--sp-4)", height: "auto" },
-            onclick: () => {
-              handle.close();
-              void actions.openNote(hit.path);
-            },
-            onmousemove: () => {
-              if (active === index) return;
-              active = index;
-              paint();
-            },
+      const node = el(
+        "button",
+        {
+          class: `palette__item${index === active ? " is-active" : ""}`,
+          type: "button",
+          role: "option",
+          "aria-selected": index === active ? "true" : "false",
+          style: { display: "block", padding: "var(--sp-3) var(--sp-4)", height: "auto" },
+          onclick: () => {
+            handle.close();
+            void actions.openNote(hit.path);
           },
-          el(
-            "div",
-            { style: { display: "flex", alignItems: "baseline", gap: "var(--sp-3)" } },
-            title,
-            el("span", { class: "palette__sub" }, relativeTime(hit.updated)),
-          ),
-          snippet,
+          onmousemove: () => setActive(index, { scroll: false }),
+        },
+        el(
+          "div",
+          { style: { display: "flex", alignItems: "baseline", gap: "var(--sp-3)" } },
+          title,
+          el("span", { class: "palette__sub" }, relativeTime(hit.updated)),
         ),
+        snippet,
       );
+      hitNodes[index] = node;
+      results.appendChild(node);
     });
 
-    results.querySelector<HTMLElement>(".palette__item.is-active")?.scrollIntoView({
-      block: "nearest",
-    });
+    hitNodes[active]?.scrollIntoView({ block: "nearest" });
   }
 
   input.addEventListener("input", () => {
@@ -538,12 +565,10 @@ export function openSearchPanel(): ModalHandle {
     const hits = state.searchHits ?? [];
     if (ev.key === "ArrowDown") {
       ev.preventDefault();
-      active = Math.min(active + 1, hits.length - 1);
-      paint();
+      setActive(Math.min(active + 1, hits.length - 1));
     } else if (ev.key === "ArrowUp") {
       ev.preventDefault();
-      active = Math.max(active - 1, 0);
-      paint();
+      setActive(Math.max(active - 1, 0));
     } else if (ev.key === "Enter") {
       ev.preventDefault();
       const hit = hits[active];

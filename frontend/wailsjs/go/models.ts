@@ -260,6 +260,40 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class SidebarData {
+	    folders: store.Folder[];
+	    tags: store.Tag[];
+	    stats: Stats;
+	
+	    static createFrom(source: any = {}) {
+	        return new SidebarData(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.folders = this.convertValues(source["folders"], store.Folder);
+	        this.tags = this.convertValues(source["tags"], store.Tag);
+	        this.stats = this.convertValues(source["stats"], Stats);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 }
 
@@ -387,6 +421,42 @@ export namespace store {
 		    return a;
 		}
 	}
+	export class Restored {
+	    kind: string;
+	    note: Note;
+	    folder: string;
+	    notes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Restored(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.note = this.convertValues(source["note"], Note);
+	        this.folder = source["folder"];
+	        this.notes = source["notes"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Tag {
 	    name: string;
 	    count: number;
@@ -403,6 +473,7 @@ export namespace store {
 	}
 	export class TrashItem {
 	    id: string;
+	    kind: string;
 	    title: string;
 	    folder: string;
 	    excerpt: string;
@@ -410,6 +481,8 @@ export namespace store {
 	    deletedAt: any;
 	    originalRel: string;
 	    size: number;
+	    notes: number;
+	    files: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new TrashItem(source);
@@ -418,12 +491,15 @@ export namespace store {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
+	        this.kind = source["kind"];
 	        this.title = source["title"];
 	        this.folder = source["folder"];
 	        this.excerpt = source["excerpt"];
 	        this.deletedAt = this.convertValues(source["deletedAt"], null);
 	        this.originalRel = source["originalRel"];
 	        this.size = source["size"];
+	        this.notes = source["notes"];
+	        this.files = source["files"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

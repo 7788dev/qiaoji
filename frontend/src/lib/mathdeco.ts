@@ -172,11 +172,30 @@ function inlineRanges(state: EditorState, skip: MathRange[]): MathRange[] {
   return out;
 }
 
+/**
+ * The last document scanned and what was found in it.
+ *
+ * Where the formulas are depends only on the text, while what gets replaced
+ * also depends on the caret. Caching on the document means moving the caret
+ * costs a walk over the handful of known ranges instead of a regex scan of the
+ * whole note plus a syntax-tree lookup per match. CodeMirror documents are
+ * immutable, so identity is a sound cache key.
+ */
+let scannedDoc: EditorState["doc"] | null = null;
+let scannedRanges: MathRange[] = [];
+
+function rangesFor(state: EditorState): MathRange[] {
+  if (scannedDoc === state.doc) return scannedRanges;
+  const blocks = blockRanges(state);
+  scannedRanges = [...blocks, ...inlineRanges(state, blocks)].sort((a, b) => a.from - b.from);
+  scannedDoc = state.doc;
+  return scannedRanges;
+}
+
 function build(state: EditorState): DecorationSet {
   if (state.doc.length > MAX_DOC) return Decoration.none;
 
-  const blocks = blockRanges(state);
-  const ranges = [...blocks, ...inlineRanges(state, blocks)].sort((a, b) => a.from - b.from);
+  const ranges = rangesFor(state);
   if (ranges.length === 0) return Decoration.none;
 
   const builder = new RangeSetBuilder<Decoration>();

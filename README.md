@@ -86,7 +86,11 @@ favorite: true
 # 欢迎使用巧记
 ```
 
+上面这六个字段是巧记自己写的。别的编辑器加的键（Obsidian 的 `aliases`、`cssclass`，或者你自定义的字段）会原样保留，保存时不会被吃掉；万一头部写坏了无法解析，巧记会报错并放弃写入，而不是拿一份新的覆盖过去。
+
 **关于示例笔记**：首次使用某个文件夹时会写入几篇示例笔记，同时留下 `.qiaoji/vault.json` 标记。把示例笔记全部删掉后，下次启动就是空的——不会再塞回来。想重新拿到示例笔记，删掉 `vault.json` 即可。
+
+**关于回收站**：删除单篇笔记会把它移进 `.qiaoji/trash`。删除文件夹则是把整个目录搬进去——里面的图片、PDF、附件都跟着走，还原时一起回来。
 
 ---
 
@@ -96,7 +100,7 @@ favorite: true
 | --- | --- | --- | --- | --- |
 | 新建笔记 | `Ctrl + N` | | 加粗 | `Ctrl + B` |
 | 保存 | `Ctrl + S` | | 斜体 | `Ctrl + I` |
-| 导出 | `Ctrl + E` | | 行内代码 | `Ctrl + E` |
+| 导出 | `Ctrl + Shift + E` | | 行内代码 | `Ctrl + E` |
 | 关闭标签 | `Ctrl + W` | | 插入链接 | `Ctrl + K` |
 | 查找 | `Ctrl + F` | | 任务项 | `Ctrl + Shift + L` |
 | 替换 | `Ctrl + H` | | 一至四级标题 | `Ctrl + 1` ~ `4` |
@@ -122,6 +126,9 @@ FTS5 的 `trigram` 分词器一次索引三个字符，查询短于三个字符�
 
 **预览为什么不走后端渲染**
 Markdown 渲染放在前端。每次敲键盘都往 Go 端往返一次会明显掉帧，本地渲染 + 140 ms 防抖才能保证长文档打字不卡。
+
+**打字为什么不会重绘整个界面**
+编辑器缓冲区的变化走 `docRevision` 这个单独的订阅主题，`tabs` 只在打开、关闭、切换标签或元数据变化时才重新发布。所以敲一个字不会重建标签栏和笔记列表、不会抢走焦点，字数统计按内容缓存并防抖。自动保存完成后也只就地更新那一行，不再重查列表、不再遍历整个笔记库统计侧边栏。
 
 **PDF 为什么调 Edge**
 PDF 用系统自带的 Edge 无头模式打印生成。渲染预览的就是同一个引擎，公式、代码高亮、表格、中文断行的结果完全一致，不需要重新实现一套排版和字体处理。
@@ -153,8 +160,8 @@ wails build -platform windows/amd64 -trimpath -ldflags "-s -w"
 
 ```bash
 go vet ./...
-go test ./internal/...
-cd frontend && npx tsc --noEmit
+go test ./...
+cd frontend && npx tsc --noEmit && npm test
 ```
 
 升级 KaTeX 或修改品牌资源后需要重新生成：
@@ -180,8 +187,10 @@ internal/exporter/       md / txt / html / pdf / docx 导出
 internal/config/         设置持久化、开机自启
 tools/                   KaTeX 样式表与品牌资源生成器
 UI/brand/                图标母版与生成的 logo
+frontend/public/          先于打包脚本执行的主题防闪脚本
 frontend/src/
   lib/                   DOM 辅助、编辑器、Markdown、虚拟列表、公式装饰
   ui/                    标题栏、侧边栏、列表、编辑区、状态栏、各类对话框
   styles/                设计令牌与样式
+  **/*.test.ts           Vitest（jsdom）：状态订阅、自动保存、菜单与弹窗生命周期
 ```

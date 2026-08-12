@@ -210,12 +210,12 @@ func readLink(s string, start int) (text string, next int, ok bool) {
 	return s[start+1 : start+close], open + end + 1, true
 }
 
-// titleFromBody uses the first ATX heading, falling back to the first
-// non-empty line, so a note always shows something meaningful in the list.
+// titleFromBody uses the first ATX heading, falling back to the first line of
+// prose, so a note always shows something meaningful in the list.
 func titleFromBody(body string) string {
 	for _, line := range strings.Split(body, "\n") {
 		t := strings.TrimSpace(line)
-		if t == "" {
+		if t == "" || isThematicBreak(t) {
 			continue
 		}
 		if strings.HasPrefix(t, "#") {
@@ -224,6 +224,20 @@ func titleFromBody(body string) string {
 		return firstRunes(t, 60)
 	}
 	return ""
+}
+
+// isThematicBreak reports whether a line is a horizontal rule. A rule is not a
+// title, and naming a file after one produces "-.md".
+func isThematicBreak(line string) bool {
+	trimmed := strings.NewReplacer(" ", "", "\t", "").Replace(line)
+	if len(trimmed) < 3 {
+		return false
+	}
+	c := trimmed[0]
+	if c != '-' && c != '*' && c != '_' {
+		return false
+	}
+	return strings.Count(trimmed, string(c)) == len(trimmed)
 }
 
 func firstRunes(s string, n int) string {

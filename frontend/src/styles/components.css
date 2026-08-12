@@ -325,10 +325,18 @@
   padding: var(--sp-8);
 }
 
+/* Dialogs live outside #app, so they carry the interface scale themselves. It
+   goes on the dialog rather than the scrim: the backdrop must stay exactly one
+   unscaled viewport, and a zoomed dialog still centres inside it.
+
+   Viewport units inside a zoomed box are read in that box's own coordinate
+   space, which is why the scale is divided out of them here. */
 .modal {
   display: flex;
   flex-direction: column;
-  max-height: min(76vh, 640px);
+  zoom: var(--ui-scale, 1);
+  max-width: calc((100vw - 2 * var(--sp-8)) / var(--ui-scale, 1));
+  max-height: min(calc(76vh / var(--ui-scale, 1)), 640px);
   border-radius: var(--r-xl);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -537,8 +545,17 @@
 .menu {
   position: fixed;
   z-index: 80;
+  /* Menus are appended to <body>, outside the scaled shell, so they carry the
+     interface scale themselves. place() converts between viewport coordinates
+     and this element's zoomed space when positioning it. */
+  zoom: var(--ui-scale, 1);
   min-width: 190px;
   max-width: 280px;
+  /* A ceiling in case JS never gets to measure; place() sets the exact value.
+     Without one, a long outline or folder list simply ran off the screen. */
+  max-height: calc((100vh - 16px) / var(--ui-scale, 1));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--sp-1);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
@@ -627,10 +644,13 @@
   pointer-events: none;
 }
 
+/* Scaled per toast rather than on the container, so the stack stays anchored
+   to the same corner at every interface scale. */
 .toast {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
+  zoom: var(--ui-scale, 1);
   max-width: 380px;
   padding: var(--sp-3) var(--sp-4);
   border: 1px solid var(--border);
@@ -665,6 +685,18 @@
 .toast__text {
   flex: 1;
   min-width: 0;
+}
+
+/* How many times the same message has arrived, shown instead of stacking
+   duplicates of an error that repeats. */
+.toast__count {
+  flex: none;
+  padding: 0 var(--sp-2);
+  border-radius: var(--r-full);
+  background: var(--bg-sunken);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .toast__action {

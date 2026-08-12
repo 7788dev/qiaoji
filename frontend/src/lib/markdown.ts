@@ -39,7 +39,10 @@ let hljs: HljsApi | null = null;
 let katexLoading: Promise<void> | null = null;
 let hljsLoading: Promise<void> | null = null;
 
-const INLINE_MATH = /\$((?:[^$\\\n]|\\.)+?)\$/;
+// Sticky, so the inline rule can match at a position without slicing the rest
+// of the document first. A note that merely mentions prices reaches this rule
+// at every "$", and copying the remainder each time made rendering quadratic.
+const INLINE_MATH = /\$((?:[^$\\\n]|\\.)+?)\$/y;
 const BLOCK_MATH_OPEN = /^\$\$\s*$/;
 
 export interface RenderResult {
@@ -111,8 +114,23 @@ function reportOnce(what: string): (err: unknown) => void {
   };
 }
 
+/**
+ * A bare "$" is a price far more often than it is a formula. Treating one as
+ * maths pulled the KaTeX bundle in while editing and inlined 360 KB of base64
+ * fonts into the exported HTML, so this looks for the shapes the renderer
+ * actually accepts instead.
+ */
+const MATH_HINT = /\$\$|\$(?:[^$\\\n]|\\.)+?\$(?!\d)/;
+
 export function detectMath(source: string): boolean {
-  return source.includes("$");
+  return MATH_HINT.test(source);
+}
+
+/** Whether the optional renderers a source needs are already in memory. */
+export function modulesReadyFor(source: string): boolean {
+  if (detectMath(source) && !katex) return false;
+  if (detectCode(source) && !hljs) return false;
+  return true;
 }
 
 export function detectCode(source: string): boolean {
@@ -133,9 +151,9 @@ const mathPlugin: Plugin = (md) => {
     // `$$` at an inline position is an escaped literal, not maths.
     if (state.src[start + 1] === "$") return false;
 
-    const rest = state.src.slice(start);
-    const match = INLINE_MATH.exec(rest);
-    if (!match || match.index !== 0) return false;
+    INLINE_MATH.lastIndex = start;
+    const match = INLINE_MATH.exec(state.src);
+    if (!match) return false;
 
     const body = match[1].trim();
     if (!body) return false;
@@ -299,20 +317,11 @@ const externalLinkPlugin: Plugin = (md) => {
 /** Adds stable ids to headings so the outline and `#anchor` links work. */
 const headingAnchorPlugin: Plugin = (md) => {
   md.core.ruler.push("heading_anchor", (state) => {
-    const used = new Map<string, number>();
+    const slug = createSlugger();
     for (let i = 0; i < state.tokens.length; i++) {
       const token = state.tokens[i];
       if (token.type !== "heading_open") continue;
-      const text = state.tokens[i + 1]?.content ?? "";
-      let slug = slugifyHeading(text);
-      const seen = used.get(slug);
-      if (seen !== undefined) {
-        used.set(slug, seen + 1);
-        slug = `${slug}-${seen + 1}`;
-      } else {
-        used.set(slug, 0);
-      }
-      token.attrSet("id", slug);
+      token.attrSet("id", slug(state.tokens[i + 1]?.content ?? ""));
     }
     return true;
   });
@@ -326,6 +335,27 @@ export function slugifyHeading(text: string): string {
       .replace(/[\s]+/g, "-")
       .replace(/[^\p{L}\p{N}\-_]/gu, "") || "section"
   );
+}
+
+/**
+ * Assigns unique heading slugs in document order.
+ *
+ * The rendered headings and the outline have to agree exactly, or clicking an
+ * entry in preview mode scrolls nowhere, so both go through this. Suffixed
+ * candidates are checked too: headings named "a", "a" and "a-1" used to
+ * produce the id "a-1" twice.
+ */
+export function createSlugger(): (text: string) => string {
+  const used = new Set<string>();
+  return (text) => {
+    const base = slugifyHeading(text);
+    let slug = base;
+    for (let n = 2; used.has(slug); n++) {
+      slug = `${base}-${n}`;
+    }
+    used.add(slug);
+    return slug;
+  };
 }
 
 /* ---------------------------------------------------------------- renderer */
@@ -383,13 +413,24 @@ export async function renderComplete(source: string): Promise<RenderResult> {
   return render(source);
 }
 
-/** First heading in the document, used to name new notes and tabs. */
+/**
+ * First heading in the document, used to name new notes and tabs.
+ *
+ * The document is scanned line by line rather than split: this runs as the
+ * user types, and the answer always comes from the top of the note, so
+ * allocating an array of every line would be work thrown away immediately.
+ */
 export function titleOf(source: string): string {
-  for (const line of source.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (trimmed.startsWith("#")) return trimmed.replace(/^#+\s*/, "").trim();
-    return trimmed.slice(0, 60);
+  let start = 0;
+  while (start < source.length) {
+    let end = source.indexOf("\n", start);
+    if (end < 0) end = source.length;
+    const trimmed = source.slice(start, end).trim();
+    if (trimmed) {
+      if (trimmed.startsWith("#")) return trimmed.replace(/^#+\s*/, "").trim();
+      return trimmed.slice(0, 60);
+    }
+    start = end + 1;
   }
   return "";
 }
@@ -404,7 +445,7 @@ export interface OutlineEntry {
 
 export function outlineOf(source: string): OutlineEntry[] {
   const out: OutlineEntry[] = [];
-  const used = new Map<string, number>();
+  const slugFor = createSlugger();
   let inFence = false;
 
   source.split("\n").forEach((line, index) => {
@@ -417,17 +458,13 @@ export function outlineOf(source: string): OutlineEntry[] {
     const match = /^(#{1,6})\s+(.*)$/.exec(trimmed);
     if (!match) return;
 
-    const text = match[2].replace(/[*_`~]/g, "").trim();
+    // Slugged from the raw heading, exactly as the renderer sees it, and only
+    // then stripped for display. Slugging the stripped text made the outline
+    // disagree with the anchor for anything containing an underscore.
+    const raw = match[2].trim();
+    const text = raw.replace(/[*_`~]/g, "").trim();
     if (!text) return;
-    let slug = slugifyHeading(text);
-    const seen = used.get(slug);
-    if (seen !== undefined) {
-      used.set(slug, seen + 1);
-      slug = `${slug}-${seen + 1}`;
-    } else {
-      used.set(slug, 0);
-    }
-    out.push({ level: match[1].length, text, slug, line: index });
+    out.push({ level: match[1].length, text, slug: slugFor(raw), line: index });
   });
   return out;
 }

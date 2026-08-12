@@ -37,17 +37,19 @@ func (ix *Index) Search(query string, limit int) ([]Hit, error) {
 	}
 
 	if len([]rune(q)) >= minTrigram {
-		hits, err := ix.searchFTS(q, limit)
-		if err == nil && len(hits) > 0 {
+		// A malformed MATCH expression should degrade to LIKE, not fail the
+		// search box. An empty result set is a real answer, so it stands.
+		if hits, err := ix.searchFTS(q, limit); err == nil {
 			return hits, nil
 		}
-		if err == nil {
-			return hits, nil
-		}
-		// A malformed MATCH expression should degrade, not fail the search box.
 	}
 	return ix.searchLike(q, limit)
 }
+
+// snippetSource caps how much of a body crosses the SQL boundary. Snippets are
+// ~110 characters taken from the first match, so pulling whole notes for sixty
+// hits was megabytes of copying to throw away.
+const snippetSource = 8192
 
 func (ix *Index) searchFTS(q string, limit int) ([]Hit, error) {
 	// Wrap in a quoted phrase so punctuation is never read as FTS syntax.
@@ -55,12 +57,12 @@ func (ix *Index) searchFTS(q string, limit int) ([]Hit, error) {
 
 	ix.mu.Lock()
 	rows, err := ix.db.Query(`
-		SELECT n.id, n.path, n.title, n.folder, n.content, n.updated, n.favorite
+		SELECT n.id, n.path, n.title, n.folder, substr(n.content, 1, ?), n.updated, n.favorite
 		FROM notes_fts
 		JOIN notes n ON n.rowid = notes_fts.rowid
 		WHERE notes_fts MATCH ?
 		ORDER BY bm25(notes_fts, 10.0, 1.0)
-		LIMIT ?`, phrase, limit)
+		LIMIT ?`, snippetSource, phrase, limit)
 	ix.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -73,11 +75,11 @@ func (ix *Index) searchLike(q string, limit int) ([]Hit, error) {
 	pattern := "%" + escapeLike(q) + "%"
 	ix.mu.Lock()
 	rows, err := ix.db.Query(`
-		SELECT id, path, title, folder, content, updated, favorite
+		SELECT id, path, title, folder, substr(content, 1, ?), updated, favorite
 		FROM notes
 		WHERE title LIKE ? ESCAPE '\' OR content LIKE ? ESCAPE '\'
 		ORDER BY (CASE WHEN title LIKE ? ESCAPE '\' THEN 0 ELSE 1 END), updated DESC
-		LIMIT ?`, pattern, pattern, pattern, limit)
+		LIMIT ?`, snippetSource, pattern, pattern, pattern, limit)
 	ix.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -120,15 +122,17 @@ func scanHits(rows rowScanner, q string) ([]Hit, error) {
 
 // highlight returns HTML-escaped text windowed around the first match, with
 // every occurrence inside the window wrapped in <mark>.
+//
+// All matching happens in rune space. Case folding is not length-preserving in
+// either runes or bytes (U+212A folds to "k", U+023A to a longer sequence), so
+// offsets taken from a lowercased copy cannot be used to slice the original
+// without cutting through a character or running off the end.
 func highlight(text, query string, width, lead int) string {
 	runes := []rune(text)
-	lowerText := strings.ToLower(text)
-	lowerQ := strings.ToLower(query)
 
 	start := 0
-	if idx := strings.Index(lowerText, lowerQ); idx > 0 {
-		runeIdx := len([]rune(text[:idx]))
-		start = runeIdx - lead
+	if idx := indexFold(runes, []rune(query)); idx > 0 {
+		start = idx - lead
 		if start < 0 {
 			start = 0
 		}
@@ -137,13 +141,12 @@ func highlight(text, query string, width, lead int) string {
 	if end > len(runes) {
 		end = len(runes)
 	}
-	window := string(runes[start:end])
 
 	var sb strings.Builder
 	if start > 0 {
 		sb.WriteString("…")
 	}
-	sb.WriteString(markAll(window, query))
+	sb.WriteString(markAll(string(runes[start:end]), query))
 	if end < len(runes) {
 		sb.WriteString("…")
 	}
@@ -151,28 +154,60 @@ func highlight(text, query string, width, lead int) string {
 }
 
 func markAll(text, query string) string {
-	if query == "" {
+	q := []rune(query)
+	if len(q) == 0 {
 		return html.EscapeString(text)
 	}
-	lowerText := strings.ToLower(text)
-	lowerQ := strings.ToLower(query)
+	runes := []rune(text)
 
 	var sb strings.Builder
 	cursor := 0
-	for {
-		i := strings.Index(lowerText[cursor:], lowerQ)
+	for cursor <= len(runes) {
+		i := indexFold(runes[cursor:], q)
 		if i < 0 {
-			sb.WriteString(html.EscapeString(text[cursor:]))
+			sb.WriteString(html.EscapeString(string(runes[cursor:])))
 			break
 		}
-		abs := cursor + i
-		sb.WriteString(html.EscapeString(text[cursor:abs]))
+		at := cursor + i
+		sb.WriteString(html.EscapeString(string(runes[cursor:at])))
 		sb.WriteString("<mark>")
-		sb.WriteString(html.EscapeString(text[abs : abs+len(query)]))
+		sb.WriteString(html.EscapeString(string(runes[at : at+len(q)])))
 		sb.WriteString("</mark>")
-		cursor = abs + len(query)
+		cursor = at + len(q)
 	}
 	return sb.String()
+}
+
+// indexFold returns the rune offset of the first case-insensitive occurrence of
+// query in text, or -1. Matching rune by rune keeps the result usable as an
+// index into text, which is the whole point.
+func indexFold(text, query []rune) int {
+	if len(query) == 0 {
+		return 0
+	}
+	if len(query) > len(text) {
+		return -1
+	}
+	for i := 0; i+len(query) <= len(text); i++ {
+		matched := true
+		for j, qr := range query {
+			if !equalFoldRune(text[i+j], qr) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return i
+		}
+	}
+	return -1
+}
+
+func equalFoldRune(a, b rune) bool {
+	if a == b {
+		return true
+	}
+	return unicode.ToLower(a) == unicode.ToLower(b)
 }
 
 // stripMarkdown flattens a note into one line of readable prose for snippets.

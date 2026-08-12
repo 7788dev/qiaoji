@@ -21,23 +21,43 @@ export interface ModalHandle {
   close: () => void;
 }
 
-/** The dialog currently on top, so Escape and the shortcut layer can defer. */
-let topmost: ModalHandle | null = null;
+/**
+ * Open dialogs, innermost last, so Escape and the shortcut layer can defer.
+ *
+ * A stack rather than a single "previous" pointer: dialogs do not always close
+ * in the order they opened, and restoring the predecessor blindly left this
+ * pointing at a dialog that was already gone.
+ */
+const stack: ModalHandle[] = [];
 
 export function activeModal(): ModalHandle | null {
-  return topmost;
+  return stack[stack.length - 1] ?? null;
+}
+
+/**
+ * Takes the shell out of the tab order while a dialog is up.
+ *
+ * aria-modal alone is only a hint: without this, Tab could still reach the
+ * note list and the sidebar behind the scrim.
+ */
+function syncShellInert(): void {
+  const shell = document.getElementById("app");
+  if (shell) shell.inert = stack.length > 0;
 }
 
 export function openModal(options: ModalOptions): ModalHandle {
   const previousFocus = document.activeElement as HTMLElement | null;
-  const previousModal = topmost;
 
   const content = el("div", {
     class: `modal${options.variant ? ` ${options.variant}` : ""}`,
     role: "dialog",
     "aria-modal": "true",
     "aria-label": options.title ?? "对话框",
-    style: options.width ? { width: `min(${options.width}px, calc(100vw - 64px))` } : undefined,
+    // The dialog carries the interface scale, so viewport units inside it are
+    // read in its own scaled space and the scale has to be divided back out.
+    style: options.width
+      ? { width: `min(${options.width}px, calc((100vw - 64px) / var(--ui-scale, 1)))` }
+      : undefined,
   });
 
   if (options.title || options.showCloseButton !== false) {
@@ -87,7 +107,10 @@ export function openModal(options: ModalOptions): ModalHandle {
     closed = true;
     releaseTrap();
     offBackdrop();
-    topmost = previousModal;
+
+    const at = stack.indexOf(handle);
+    if (at >= 0) stack.splice(at, 1);
+    syncShellInert();
 
     root.classList.add("is-closing");
 
@@ -116,7 +139,8 @@ export function openModal(options: ModalOptions): ModalHandle {
 
   document.body.appendChild(root);
   const handle: ModalHandle = { root, content, close };
-  topmost = handle;
+  stack.push(handle);
+  syncShellInert();
 
   requestAnimationFrame(() => {
     const target = options.initialFocus?.() ?? content.querySelector<HTMLElement>(

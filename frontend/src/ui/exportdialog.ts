@@ -102,8 +102,13 @@ export function openExportDialog(deps: ExportDeps): void {
   submit.addEventListener("click", async () => {
     if (busy) return;
     if (!dir) {
-      notify.error("请先选择保存位置");
-      return;
+      // The very first export has no remembered folder, so ask for one here
+      // rather than refusing with an error the user cannot act on in place.
+      const picked = await api.selectExportDir().catch(() => "");
+      if (!picked) return;
+      dir = picked;
+      dirLabel.textContent = shortPath(dir);
+      dirLabel.title = dir;
     }
     busy = true;
     submit.replaceChildren(el("span", { class: "spinner" }), "导出中…");

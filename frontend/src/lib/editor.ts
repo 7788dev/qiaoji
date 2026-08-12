@@ -255,16 +255,24 @@ function toggleWrap(marker: string): Command {
   };
 }
 
-/** Cycles the heading level of every line the selection touches. */
+/**
+ * Cycles the heading level of every line the selection touches.
+ *
+ * Lines are visited once: two cursors on one line produced two overlapping
+ * changes for the same range, which ChangeSet.of throws on.
+ */
 function setHeading(level: number): Command {
   return (view) => {
     const { state } = view;
     const changes: { from: number; to: number; insert: string }[] = [];
+    const seen = new Set<number>();
 
     for (const range of state.selection.ranges) {
       const start = state.doc.lineAt(range.from).number;
       const end = state.doc.lineAt(range.to).number;
       for (let n = start; n <= end; n++) {
+        if (seen.has(n)) continue;
+        seen.add(n);
         const line = state.doc.line(n);
         const match = /^(#{1,6})\s+/.exec(line.text);
         const currentLevel = match ? match[1].length : 0;
@@ -349,11 +357,14 @@ const continueList: Command = (view) => {
 const toggleTask: Command = (view) => {
   const { state } = view;
   const changes: { from: number; to: number; insert: string }[] = [];
+  const seen = new Set<number>();
 
   for (const range of state.selection.ranges) {
     const start = state.doc.lineAt(range.from).number;
     const end = state.doc.lineAt(range.to).number;
     for (let n = start; n <= end; n++) {
+      if (seen.has(n)) continue;
+      seen.add(n);
       const line = state.doc.line(n);
       const match = LIST_ITEM.exec(line.text);
       if (!match) {
@@ -384,17 +395,46 @@ const toggleTask: Command = (view) => {
   return true;
 };
 
-/** Indents or outdents whole lines, so Tab works on a selected block. */
+/**
+ * Indents or outdents whole lines, so Tab works on a selected block.
+ *
+ * With no selection and a caret past the leading whitespace, Tab inserts at
+ * the caret instead: pressing it mid-sentence used to jump the indent to the
+ * start of the line, which is never what was meant.
+ *
+ * Lines are deduplicated because two cursors on the same line would otherwise
+ * produce overlapping changes, which ChangeSet.of rejects outright.
+ */
 function shiftLines(direction: 1 | -1): Command {
   return (view) => {
     const { state } = view;
     const unit = " ".repeat(state.facet(EditorState.tabSize));
+
+    const main = state.selection.main;
+    if (direction === 1 && state.selection.ranges.length === 1 && main.empty) {
+      const line = state.doc.lineAt(main.head);
+      const lead = /^[ \t]*/.exec(line.text)?.[0].length ?? 0;
+      if (main.head > line.from + lead) {
+        view.dispatch(
+          state.update({
+            changes: { from: main.head, to: main.head, insert: unit },
+            selection: EditorSelection.cursor(main.head + unit.length),
+            userEvent: "input.indent",
+          }),
+        );
+        return true;
+      }
+    }
+
     const changes: { from: number; to: number; insert: string }[] = [];
+    const seen = new Set<number>();
 
     for (const range of state.selection.ranges) {
       const start = state.doc.lineAt(range.from).number;
       const end = state.doc.lineAt(range.to).number;
       for (let n = start; n <= end; n++) {
+        if (seen.has(n)) continue;
+        seen.add(n);
         const line = state.doc.line(n);
         if (direction === 1) {
           changes.push({ from: line.from, to: line.from, insert: unit });
@@ -687,14 +727,29 @@ export class MarkdownEditor {
     // CodeMirror estimates line heights before it has measured them, and
     // rendered maths widgets change them again a moment later. Both nudge the
     // scroll position, so the target is re-applied over the next two frames.
+    //
+    // Pending frames from an earlier load are cancelled first: switching notes
+    // quickly otherwise let the previous note's offset land on the new one.
+    this.cancelScrollRestore();
     const apply = () => {
       this.view.scrollDOM.scrollTop = scrollTop;
     };
     apply();
-    requestAnimationFrame(() => {
+    this.scrollFrame = requestAnimationFrame(() => {
       apply();
-      requestAnimationFrame(apply);
+      this.scrollFrame = requestAnimationFrame(() => {
+        apply();
+        this.scrollFrame = 0;
+      });
     });
+  }
+
+  private scrollFrame = 0;
+
+  private cancelScrollRestore(): void {
+    if (!this.scrollFrame) return;
+    cancelAnimationFrame(this.scrollFrame);
+    this.scrollFrame = 0;
   }
 
   /**
@@ -797,6 +852,7 @@ export class MarkdownEditor {
   }
 
   destroy(): void {
+    this.cancelScrollRestore();
     this.view.destroy();
   }
 }

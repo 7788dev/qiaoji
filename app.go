@@ -39,15 +39,78 @@ type App struct {
 	startOnce sync.Once
 
 	mu       sync.RWMutex
-	vault    *store.Vault
-	index    *index.Index
-	watcher  *watch.Watcher
+	open     *vaultSession
 	vaultErr string
 
 	// selfWriteUntil marks a window during which filesystem events are almost
 	// certainly echoes of our own save, so the UI is told not to treat them as
 	// external edits.
 	selfWriteUntil atomic.Int64
+
+	// quitRequested distinguishes "close the window" from "exit the app". The
+	// close-to-tray preference applies to the former only.
+	quitRequested atomic.Bool
+
+	closeMu    sync.Mutex
+	closePhase closePhase
+	closeDone  chan struct{}
+}
+
+// closePhase tracks the two-step window close: the first attempt is vetoed
+// while the frontend flushes, and the confirmation releases it.
+type closePhase int
+
+const (
+	closeIdle closePhase = iota
+	closeFlushing
+	closeConfirmed
+)
+
+// vaultSession owns one open library: the folder, its search index and its
+// watcher, for as long as that library is the current one.
+//
+// Every operation holds the session open while it runs. Without that, opening
+// a different library closed the index while queries were still reading from
+// it, and the watcher's debounced reindex could fire against a database that
+// had just been shut.
+type vaultSession struct {
+	vault   *store.Vault
+	index   *index.Index
+	watcher *watch.Watcher
+
+	use    sync.RWMutex
+	closed bool
+}
+
+// acquire holds the session open, reporting false once it has been closed.
+func (s *vaultSession) acquire() bool {
+	s.use.RLock()
+	if s.closed {
+		s.use.RUnlock()
+		return false
+	}
+	return true
+}
+
+func (s *vaultSession) release() { s.use.RUnlock() }
+
+func (s *vaultSession) close() {
+	// The watcher goes first, and outside the lock: closing it waits for a
+	// debounced callback that is itself holding the session open, so doing
+	// this under the write lock would deadlock against that callback.
+	if s.watcher != nil {
+		_ = s.watcher.Close()
+		s.watcher = nil
+	}
+
+	s.use.Lock()
+	s.closed = true
+	s.use.Unlock()
+
+	// Every reader has drained, so the index has no users left.
+	if s.index != nil {
+		_ = s.index.Close()
+	}
 }
 
 func NewApp() *App {
@@ -81,14 +144,12 @@ func (a *App) waitForStartup() {
 
 func (a *App) shutdown(context.Context) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.watcher != nil {
-		_ = a.watcher.Close()
-		a.watcher = nil
-	}
-	if a.index != nil {
-		_ = a.index.Close()
-		a.index = nil
+	previous := a.open
+	a.open = nil
+	a.mu.Unlock()
+
+	if previous != nil {
+		previous.close()
 	}
 }
 
@@ -122,7 +183,7 @@ func (a *App) Bootstrap() Bootstrap {
 		Version:   config.AppVersion,
 	}
 	a.mu.RLock()
-	ready := a.vault != nil
+	ready := a.open != nil
 	out.Error = a.vaultErr
 	a.mu.RUnlock()
 	out.VaultReady = ready
@@ -181,7 +242,11 @@ func (a *App) openVault(path string) error {
 	ix, err := index.Open(v.InternalPath("index.db"))
 	if err != nil {
 		// A corrupt index must never block startup; the vault is the truth.
-		_ = os.Remove(v.InternalPath("index.db"))
+		// The write-ahead log goes too, or a stale one is replayed into the
+		// database we just recreated.
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			_ = os.Remove(v.InternalPath("index.db" + suffix))
+		}
 		ix, err = index.Open(v.InternalPath("index.db"))
 		if err != nil {
 			return fmt.Errorf("无法建立搜索索引: %w", err)
@@ -193,51 +258,66 @@ func (a *App) openVault(path string) error {
 		}
 	}
 
+	session := &vaultSession{vault: v, index: ix}
+	// The watcher reports changes to this library, so its callback works
+	// against this session rather than looking up whichever one is current.
+	if w, werr := watch.New(v.Root(), 400*time.Millisecond, func() {
+		a.onVaultChanged(session)
+	}); werr == nil {
+		session.watcher = w
+	}
+
 	a.mu.Lock()
-	if a.watcher != nil {
-		_ = a.watcher.Close()
-	}
-	if a.index != nil {
-		_ = a.index.Close()
-	}
-	a.vault, a.index = v, ix
+	previous := a.open
+	a.open = session
 	a.vaultErr = ""
 	a.mu.Unlock()
 
-	w, err := watch.New(v.Root(), 400*time.Millisecond, a.onVaultChanged)
-	if err == nil {
-		a.mu.Lock()
-		a.watcher = w
-		a.mu.Unlock()
+	// Closing waits for in-flight queries, so it happens after the swap and
+	// outside the lock; new work already goes to the new session.
+	if previous != nil {
+		previous.close()
 	}
 	return nil
 }
 
-func (a *App) onVaultChanged() {
-	v, ix := a.current()
-	if v == nil || ix == nil {
+func (a *App) onVaultChanged(s *vaultSession) {
+	if !s.acquire() {
 		return
 	}
-	changed, err := ix.Sync(v)
-	if err != nil || changed == 0 {
+	defer s.release()
+
+	changed, err := s.index.Sync(s.vault)
+	if err != nil {
+		// Discarding this used to turn a persistently failing index into a
+		// silently empty note list.
+		if a.ctx != nil {
+			runtime.LogErrorf(a.ctx, "index sync: %v", err)
+		}
+		return
+	}
+	if changed == 0 {
 		return
 	}
 	external := time.Now().UnixMilli() > a.selfWriteUntil.Load()
 	a.emit("vault:changed", map[string]any{"external": external, "changed": changed})
 }
 
-func (a *App) current() (*store.Vault, *index.Index) {
+func (a *App) session() *vaultSession {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.vault, a.index
+	return a.open
 }
 
-func (a *App) need() (*store.Vault, *index.Index, error) {
-	v, ix := a.current()
-	if v == nil || ix == nil {
-		return nil, nil, errors.New("尚未打开笔记库")
+// need returns the open library plus a release function that must be deferred.
+// Holding the session for the whole operation is what keeps a library switch
+// from closing the index while this query is still reading from it.
+func (a *App) need() (*store.Vault, *index.Index, func(), error) {
+	s := a.session()
+	if s == nil || !s.acquire() {
+		return nil, nil, func() {}, errors.New("尚未打开笔记库")
 	}
-	return v, ix, nil
+	return s.vault, s.index, s.release, nil
 }
 
 func (a *App) emit(name string, payload any) {
@@ -263,76 +343,120 @@ func (a *App) SelectVaultDir() (string, error) {
 }
 
 func (a *App) Stats() Stats {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return Stats{}
 	}
-	metas, _ := ix.List(index.Query{Scope: "all", SortBy: "updated", Limit: 100000})
+	defer done()
 	folders, _ := v.Folders()
 	tags, _ := ix.Tags()
-	trash, _ := v.ListTrash()
+	return a.statsFrom(v, ix, len(folders), len(tags))
+}
 
-	out := Stats{
-		Notes:   len(metas),
-		Folders: len(folders),
-		Tags:    len(tags),
-		Trash:   len(trash),
+// statsFrom totals the library from SQL aggregates and a directory count,
+// taking the folder and tag totals from a caller that already has them.
+func (a *App) statsFrom(v *store.Vault, ix *index.Index, folders, tags int) Stats {
+	sum, _ := ix.Summary()
+	return Stats{
+		Notes:   sum.Notes,
+		Words:   sum.Words,
+		Bytes:   sum.Bytes,
+		Folders: folders,
+		Tags:    tags,
+		Trash:   v.CountTrash(),
 	}
-	for _, m := range metas {
-		out.Words += m.Words
-		out.Bytes += m.Size
+}
+
+// SidebarData is everything the navigation pane draws.
+//
+// It is one call rather than three because the panel refreshes after every
+// note operation: asking separately made each refresh walk the vault twice and
+// scan the tag column three times.
+type SidebarData struct {
+	Folders []store.Folder `json:"folders"`
+	Tags    []store.Tag    `json:"tags"`
+	Stats   Stats          `json:"stats"`
+}
+
+func (a *App) Sidebar() (SidebarData, error) {
+	v, ix, done, err := a.need()
+	if err != nil {
+		return SidebarData{}, err
 	}
-	return out
+	defer done()
+	folders, err := v.Folders()
+	if err != nil {
+		return SidebarData{}, err
+	}
+	tags, err := ix.Tags()
+	if err != nil {
+		return SidebarData{}, err
+	}
+	return SidebarData{
+		Folders: folders,
+		Tags:    tags,
+		Stats:   a.statsFrom(v, ix, len(folders), len(tags)),
+	}, nil
 }
 
 // RebuildIndex throws away the search index and rebuilds it from disk.
 func (a *App) RebuildIndex() (Stats, error) {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return Stats{}, err
 	}
+	defer done()
 	if err := ix.Reset(); err != nil {
 		return Stats{}, err
 	}
 	if _, err := ix.Sync(v); err != nil {
 		return Stats{}, err
 	}
-	return a.Stats(), nil
+	// Computed here rather than through Stats(): acquiring the session a
+	// second time while already holding it would deadlock behind a library
+	// switch waiting for its exclusive turn.
+	folders, _ := v.Folders()
+	tags, _ := ix.Tags()
+	return a.statsFrom(v, ix, len(folders), len(tags)), nil
 }
 
 // ---------------------------------------------------------------- notes
 
 func (a *App) ListNotes(q index.Query) ([]store.Meta, error) {
-	_, ix, err := a.need()
+	_, ix, done, err := a.need()
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return ix.List(q)
 }
 
 func (a *App) ListFolders() ([]store.Folder, error) {
-	v, _, err := a.need()
+	v, _, done, err := a.need()
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return v.Folders()
 }
 
 func (a *App) ListTags() ([]store.Tag, error) {
-	_, ix, err := a.need()
+	_, ix, done, err := a.need()
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return ix.Tags()
 }
 
 // GetNote loads a note by path, falling back to its stable id when the file
 // was renamed or moved behind our back.
 func (a *App) GetNote(path, id string) (store.Note, error) {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return store.Note{}, err
 	}
+	defer done()
 	n, err := v.Read(path)
 	if err == nil {
 		return n, nil
@@ -348,10 +472,11 @@ func (a *App) GetNote(path, id string) (store.Note, error) {
 }
 
 func (a *App) CreateNote(folder, title string) (store.Note, error) {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return store.Note{}, err
 	}
+	defer done()
 	a.touch()
 	n, err := v.Create(folder, title, "")
 	if err != nil {
@@ -362,10 +487,11 @@ func (a *App) CreateNote(folder, title string) (store.Note, error) {
 }
 
 func (a *App) SaveNote(path, content string) (store.Meta, error) {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return store.Meta{}, err
 	}
+	defer done()
 	a.touch()
 	n, err := v.Save(path, content)
 	if err != nil {
@@ -381,10 +507,11 @@ func (a *App) SaveNote(path, content string) (store.Meta, error) {
 }
 
 func (a *App) RenameNote(path, title string) (store.Meta, error) {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return store.Meta{}, err
 	}
+	defer done()
 	a.touch()
 	n, err := v.Rename(path, title)
 	if err != nil {
@@ -398,10 +525,11 @@ func (a *App) RenameNote(path, title string) (store.Meta, error) {
 }
 
 func (a *App) MoveNote(path, folder string) (store.Meta, error) {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return store.Meta{}, err
 	}
+	defer done()
 	a.touch()
 	n, err := v.Move(path, folder)
 	if err != nil {
@@ -415,10 +543,11 @@ func (a *App) MoveNote(path, folder string) (store.Meta, error) {
 }
 
 func (a *App) DuplicateNote(path string) (store.Meta, error) {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return store.Meta{}, err
 	}
+	defer done()
 	a.touch()
 	n, err := v.Duplicate(path)
 	if err != nil {
@@ -429,10 +558,11 @@ func (a *App) DuplicateNote(path string) (store.Meta, error) {
 }
 
 func (a *App) SetFavorite(path string, favorite bool) (store.Meta, error) {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return store.Meta{}, err
 	}
+	defer done()
 	a.touch()
 	n, err := v.SetFavorite(path, favorite)
 	if err != nil {
@@ -443,10 +573,11 @@ func (a *App) SetFavorite(path string, favorite bool) (store.Meta, error) {
 }
 
 func (a *App) SetNoteTags(path string, tags []string) (store.Meta, error) {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return store.Meta{}, err
 	}
+	defer done()
 	a.touch()
 	n, err := v.SetTags(path, tags)
 	if err != nil {
@@ -456,65 +587,82 @@ func (a *App) SetNoteTags(path string, tags []string) (store.Meta, error) {
 	return n.Meta, nil
 }
 
-func (a *App) DeleteNote(path string) error {
-	v, ix, err := a.need()
+// DeleteNote moves a note to the trash and returns the entry it became, so
+// "undo" can restore exactly that entry instead of guessing from a path.
+func (a *App) DeleteNote(path string) (store.TrashItem, error) {
+	v, ix, done, err := a.need()
 	if err != nil {
-		return err
+		return store.TrashItem{}, err
 	}
+	defer done()
 	a.touch()
-	if _, err := v.Trash(path); err != nil {
-		return err
+	item, err := v.Trash(path)
+	if err != nil {
+		return store.TrashItem{}, err
 	}
-	return ix.Remove(path)
+	return item, ix.Remove(path)
 }
 
 // ---------------------------------------------------------------- trash
 
 func (a *App) ListTrash() ([]store.TrashItem, error) {
-	v, _, err := a.need()
+	v, _, done, err := a.need()
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return v.ListTrash()
 }
 
-func (a *App) RestoreNote(entryID string) (store.Meta, error) {
-	v, ix, err := a.need()
+// RestoreNote puts a trash entry back. An entry can be a single note or a
+// whole folder, so the result says which came back.
+func (a *App) RestoreNote(entryID string) (store.Restored, error) {
+	v, ix, done, err := a.need()
 	if err != nil {
-		return store.Meta{}, err
+		return store.Restored{}, err
 	}
+	defer done()
 	a.touch()
-	n, err := v.Restore(entryID)
+	out, err := v.Restore(entryID)
 	if err != nil {
-		return store.Meta{}, err
+		return store.Restored{}, err
 	}
-	_ = ix.Upsert(n)
-	return n.Meta, nil
+	if out.Kind == store.TrashFolder {
+		// The restored notes are absent from the index, so a stat walk picks
+		// up exactly them and leaves the rest of the library alone.
+		_, _ = ix.Sync(v)
+		return out, nil
+	}
+	_ = ix.Upsert(out.Note)
+	return out, nil
 }
 
 func (a *App) PurgeTrashItem(entryID string) error {
-	v, _, err := a.need()
+	v, _, done, err := a.need()
 	if err != nil {
 		return err
 	}
+	defer done()
 	return v.PurgeTrash(entryID)
 }
 
 func (a *App) EmptyTrash() error {
-	v, _, err := a.need()
+	v, _, done, err := a.need()
 	if err != nil {
 		return err
 	}
+	defer done()
 	return v.EmptyTrash()
 }
 
 // ---------------------------------------------------------------- folders
 
 func (a *App) CreateFolder(name string) (store.Folder, error) {
-	v, _, err := a.need()
+	v, _, done, err := a.need()
 	if err != nil {
 		return store.Folder{}, err
 	}
+	defer done()
 	a.touch()
 	f, err := v.CreateFolder(name)
 	if errors.Is(err, store.ErrExists) {
@@ -524,10 +672,11 @@ func (a *App) CreateFolder(name string) (store.Folder, error) {
 }
 
 func (a *App) RenameFolder(rel, name string) error {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return err
 	}
+	defer done()
 	a.touch()
 	if err := v.RenameFolder(rel, name); err != nil {
 		if errors.Is(err, store.ErrExists) {
@@ -535,23 +684,30 @@ func (a *App) RenameFolder(rel, name string) error {
 		}
 		return err
 	}
-	_ = ix.Reset()
+	// Only the moved subtree is dropped; the following stat walk re-reads
+	// those notes and nothing else. Rebuilding the whole index here cost the
+	// full cold-start price for renaming one directory.
+	if err := ix.RemoveUnder(rel); err != nil {
+		return err
+	}
 	_, err = ix.Sync(v)
 	return err
 }
 
-func (a *App) DeleteFolder(rel string) error {
-	v, ix, err := a.need()
+// DeleteFolder moves a folder and everything inside it to the trash as one
+// entry, so attachments come back with the notes.
+func (a *App) DeleteFolder(rel string) (store.TrashItem, error) {
+	v, ix, done, err := a.need()
 	if err != nil {
-		return err
+		return store.TrashItem{}, err
 	}
+	defer done()
 	a.touch()
-	if err := v.DeleteFolder(rel); err != nil {
-		return err
+	item, err := v.DeleteFolder(rel)
+	if err != nil {
+		return store.TrashItem{}, err
 	}
-	_ = ix.Reset()
-	_, err = ix.Sync(v)
-	return err
+	return item, ix.RemoveUnder(rel)
 }
 
 // ---------------------------------------------------------------- tags
@@ -587,10 +743,11 @@ func (a *App) DeleteTag(name string) (int, error) {
 }
 
 func (a *App) mutateTag(name string, fn func([]string) []string) (int, error) {
-	v, ix, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return 0, err
 	}
+	defer done()
 	metas, err := ix.List(index.Query{Scope: "tag", Value: name, Limit: 100000})
 	if err != nil {
 		return 0, err
@@ -611,18 +768,20 @@ func (a *App) mutateTag(name string, fn func([]string) []string) (int, error) {
 // ---------------------------------------------------------------- search
 
 func (a *App) Search(query string, limit int) ([]index.Hit, error) {
-	_, ix, err := a.need()
+	_, ix, done, err := a.need()
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return ix.Search(index.NormaliseQuery(query), limit)
 }
 
 func (a *App) Suggest(query string, limit int) ([]store.Meta, error) {
-	_, ix, err := a.need()
+	_, ix, done, err := a.need()
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return ix.Suggest(index.NormaliseQuery(query), limit)
 }
 
@@ -716,10 +875,11 @@ func (a *App) SaveWindowState(width, height, x, y int, maximised bool) {
 
 // SortedFolderNames is used by the "move to folder" picker.
 func (a *App) SortedFolderNames() ([]string, error) {
-	v, _, err := a.need()
+	v, _, done, err := a.need()
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	folders, err := v.Folders()
 	if err != nil {
 		return nil, err

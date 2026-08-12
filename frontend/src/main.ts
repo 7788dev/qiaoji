@@ -172,7 +172,10 @@ function buildShell(): void {
       { key: "n", ctrl: true, run: () => void actions.newNote() },
       { key: "o", ctrl: true, run: () => openPalette(commands) },
       { key: "s", ctrl: true, run: () => void actions.saveActive() },
-      { key: "e", ctrl: true, run: paletteDeps.openExport },
+      // Shift, because the global layer runs in the capture phase and stops
+      // propagation: a plain Ctrl+E here meant the editor's inline-code
+      // binding could never fire, though three places advertised it.
+      { key: "e", ctrl: true, shift: true, run: paletteDeps.openExport },
       {
         key: "w",
         ctrl: true,
@@ -223,9 +226,21 @@ function buildShell(): void {
     editorPane.focus();
   });
 
-  // The Go side vetoes the close until the frontend has flushed its buffers.
-  api.onBackend("app:before-close", () => {
-    void actions.saveAll();
+  // The Go side vetoes the close and waits for this answer, so the process
+  // cannot exit while the flush is still in flight.
+  api.onBackend("app:before-close", (payload) => {
+    const quitting = (payload as { quitting?: boolean } | undefined)?.quitting ?? true;
+    void (async () => {
+      const flushed = await actions.saveAll();
+      if (flushed) {
+        if (quitting) await api.confirmClose();
+        return;
+      }
+      // Losing the edit is worse than an unexpected window. Coming back from
+      // the tray matters most: hidden, there is nowhere to show the error.
+      await (quitting ? api.cancelClose() : api.showWindow());
+      notify.error("有笔记未能保存，请检查笔记库所在磁盘");
+    })();
   });
 
   // A last-ditch flush for kill paths that skip the graceful close.

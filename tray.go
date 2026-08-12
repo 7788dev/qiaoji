@@ -75,9 +75,16 @@ func (t *tray) start(ctx context.Context, app *App) {
 						showWindow(ctx)
 						app.emit("tray:new-note", nil)
 					case <-mQuit.ClickedCh:
-						app.persistWindow(ctx)
-						wruntime.Quit(ctx)
-						return
+						// Quitting from the tray must exit even when the
+						// close-to-tray preference is on: the tray is the only
+						// way back from a hidden window, so hiding again here
+						// would leave no way out at all.
+						//
+						// The loop keeps running afterwards. A quit can be
+						// called off when a note fails to save, and stopping
+						// here would leave the tray icon on screen with
+						// nothing behind it.
+						app.RequestQuit()
 					case <-ctx.Done():
 						return
 					}

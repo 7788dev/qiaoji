@@ -146,7 +146,9 @@ func (v *Vault) readNote(abs string) (Note, error) {
 	if err != nil {
 		return Note{}, err
 	}
-	fm, body := parseFrontMatter(raw)
+	// A header we cannot decode still lists correctly; only writes have to
+	// refuse, and they re-parse before touching the file.
+	fm, body, _ := parseFrontMatter(raw)
 
 	rel, _ := filepath.Rel(v.root, abs)
 	folder := filepath.ToSlash(filepath.Dir(rel))
@@ -257,7 +259,10 @@ func (v *Vault) Save(abs, body string) (Note, error) {
 	if err != nil {
 		return Note{}, err
 	}
-	fm, _ := parseFrontMatter(raw)
+	fm, _, err := parseFrontMatter(raw)
+	if err != nil {
+		return Note{}, err
+	}
 	if fm.ID == "" {
 		fm.ID = newID()
 	}
@@ -304,7 +309,10 @@ func (v *Vault) UpdateMeta(abs string, fn func(*frontMatter)) (Note, error) {
 	if err != nil {
 		return Note{}, err
 	}
-	fm, body := parseFrontMatter(raw)
+	fm, body, err := parseFrontMatter(raw)
+	if err != nil {
+		return Note{}, err
+	}
 	if fm.ID == "" {
 		fm.ID = newID()
 	}
@@ -340,7 +348,11 @@ func (v *Vault) Rename(abs, title string) (Note, error) {
 		v.mu.Unlock()
 		return Note{}, err
 	}
-	fm, body := parseFrontMatter(raw)
+	fm, body, err := parseFrontMatter(raw)
+	if err != nil {
+		v.mu.Unlock()
+		return Note{}, err
+	}
 	if fm.ID == "" {
 		fm.ID = newID()
 	}
@@ -470,7 +482,12 @@ func (v *Vault) Folders() ([]Folder, error) {
 		if key == "." {
 			return nil
 		}
-		counts[key]++
+		// Every ancestor counts the note too. Opening a folder lists its
+		// subfolders as well, so a count of direct children only would
+		// contradict the list the user is about to see.
+		for k := key; k != ""; k = parentOf(k) {
+			counts[k]++
+		}
 		return nil
 	})
 	if err != nil {
@@ -530,28 +547,10 @@ func (v *Vault) RenameFolder(rel, name string) error {
 	return os.Rename(src, dst)
 }
 
-// DeleteFolder moves every note inside to the trash, then removes the folder.
-func (v *Vault) DeleteFolder(rel string) error {
-	if rel == "" {
-		return errors.New("参数无效")
-	}
-	dir := filepath.Join(v.root, filepath.FromSlash(rel))
-	if !v.contains(dir) {
-		return errors.New("folder outside vault")
-	}
-	var files []string
-	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && isMarkdown(d.Name()) {
-			files = append(files, p)
-		}
-		return nil
-	})
-	for _, f := range files {
-		if _, err := v.Trash(f); err != nil {
-			return err
-		}
-	}
-	return os.RemoveAll(dir)
+// DeleteFolder moves the folder and everything in it to the trash as one
+// recoverable entry.
+func (v *Vault) DeleteFolder(rel string) (TrashItem, error) {
+	return v.TrashFolder(rel)
 }
 
 // ---------------------------------------------------------------- filenames
@@ -592,15 +591,27 @@ func slugify(title string) string {
 	return s
 }
 
+// uniquePath picks a free filename for a note.
+//
+// The directory is listed once instead of probing "base-2", "base-3" and so on
+// with a stat each: every new note starts out as 未命名笔记, so the naive probe
+// turns a folder of untitled notes into quadratic filesystem work.
 func uniquePath(dir, base string) string {
 	p := filepath.Join(dir, base+".md")
 	if _, err := os.Stat(p); os.IsNotExist(err) {
 		return p
 	}
+
+	taken := make(map[string]bool)
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			taken[strings.ToLower(e.Name())] = true
+		}
+	}
 	for i := 2; i < 10000; i++ {
-		p = filepath.Join(dir, fmt.Sprintf("%s-%d.md", base, i))
-		if _, err := os.Stat(p); os.IsNotExist(err) {
-			return p
+		name := fmt.Sprintf("%s-%d.md", base, i)
+		if !taken[strings.ToLower(name)] {
+			return filepath.Join(dir, name)
 		}
 	}
 	return filepath.Join(dir, base+"-"+newID()[:8]+".md")

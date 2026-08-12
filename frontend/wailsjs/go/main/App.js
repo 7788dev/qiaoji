@@ -10,6 +10,14 @@ export function Bootstrap() {
   return window['go']['main']['App']['Bootstrap']();
 }
 
+export function CancelClose() {
+  return window['go']['main']['App']['CancelClose']();
+}
+
+export function ConfirmClose() {
+  return window['go']['main']['App']['ConfirmClose']();
+}
+
 export function CreateFolder(arg1) {
   return window['go']['main']['App']['CreateFolder'](arg1);
 }
@@ -102,6 +110,10 @@ export function RenameTag(arg1, arg2) {
   return window['go']['main']['App']['RenameTag'](arg1, arg2);
 }
 
+export function RequestQuit() {
+  return window['go']['main']['App']['RequestQuit']();
+}
+
 export function RestoreNote(arg1) {
   return window['go']['main']['App']['RestoreNote'](arg1);
 }
@@ -140,6 +152,14 @@ export function SetFavorite(arg1, arg2) {
 
 export function SetNoteTags(arg1, arg2) {
   return window['go']['main']['App']['SetNoteTags'](arg1, arg2);
+}
+
+export function ShowWindow() {
+  return window['go']['main']['App']['ShowWindow']();
+}
+
+export function Sidebar() {
+  return window['go']['main']['App']['Sidebar']();
 }
 
 export function SortedFolderNames() {

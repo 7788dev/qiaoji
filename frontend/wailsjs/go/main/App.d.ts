@@ -10,13 +10,17 @@ export function ApplyTheme(arg1:string):Promise<void>;
 
 export function Bootstrap():Promise<main.Bootstrap>;
 
+export function CancelClose():Promise<void>;
+
+export function ConfirmClose():Promise<void>;
+
 export function CreateFolder(arg1:string):Promise<store.Folder>;
 
 export function CreateNote(arg1:string,arg2:string):Promise<store.Note>;
 
-export function DeleteFolder(arg1:string):Promise<void>;
+export function DeleteFolder(arg1:string):Promise<store.TrashItem>;
 
-export function DeleteNote(arg1:string):Promise<void>;
+export function DeleteNote(arg1:string):Promise<store.TrashItem>;
 
 export function DeleteTag(arg1:string):Promise<number>;
 
@@ -56,7 +60,9 @@ export function RenameNote(arg1:string,arg2:string):Promise<store.Meta>;
 
 export function RenameTag(arg1:string,arg2:string):Promise<number>;
 
-export function RestoreNote(arg1:string):Promise<store.Meta>;
+export function RequestQuit():Promise<void>;
+
+export function RestoreNote(arg1:string):Promise<store.Restored>;
 
 export function RevealInExplorer(arg1:string):Promise<void>;
 
@@ -75,6 +81,10 @@ export function SelectVaultDir():Promise<string>;
 export function SetFavorite(arg1:string,arg2:boolean):Promise<store.Meta>;
 
 export function SetNoteTags(arg1:string,arg2:Array<string>):Promise<store.Meta>;
+
+export function ShowWindow():Promise<void>;
+
+export function Sidebar():Promise<main.SidebarData>;
 
 export function SortedFolderNames():Promise<Array<string>>;
 

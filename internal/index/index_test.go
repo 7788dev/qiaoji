@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"qiaoji/internal/store"
 )
@@ -412,6 +413,130 @@ func TestRenamedFileDoesNotDuplicateIndexRow(t *testing.T) {
 	}
 	if count, _ := ix.Count(); count != 1 {
 		t.Errorf("Count = %d after rename, want 1 (the stale row must go)", count)
+	}
+}
+
+// Case folding is not length-preserving, so offsets taken from a lowercased
+// copy cannot index the original. Getting this wrong emitted broken UTF-8 into
+// the result list, and for some code points panicked outright.
+func TestHighlightIsSafeAcrossCaseFolding(t *testing.T) {
+	cases := []struct{ text, query string }{
+		{"note aaaaKbbbb\u212Acccc", "\u212A"},  // Kelvin sign folds shorter
+		{"note \u023Abbbb\u023Acccc", "\u023A"}, // folds longer
+		{"Straße und STRASSE", "ß"},             // sharp s
+		{"İstanbul ve istanbul", "i"},           // dotted capital I
+		{"中文标题 中文正文", "中文"},                     // the ordinary path
+		{"MiXeD Case Text", "case"},             // ASCII, case-insensitive
+	}
+	for _, c := range cases {
+		got := highlight(c.text, c.query, 200, 20)
+		if !utf8.ValidString(got) {
+			t.Errorf("highlight(%q, %q) produced invalid UTF-8: %q", c.text, c.query, got)
+		}
+		if strings.Contains(got, "<mark></mark>") {
+			t.Errorf("highlight(%q, %q) marked nothing: %q", c.text, c.query, got)
+		}
+	}
+
+	// The marked run has to be the text that matched, not a byte window of it.
+	got := markAll("找到 ABC 了", "abc")
+	if !strings.Contains(got, "<mark>ABC</mark>") {
+		t.Errorf("markAll = %q, want the original casing inside the mark", got)
+	}
+}
+
+func TestSearchSnippetsStayIntact(t *testing.T) {
+	v, ix := newFixture(t)
+	if _, err := v.Create("", "长笔记", "# 长笔记\n\n"+strings.Repeat("很长的正文内容。", 2000)+"\n关键词在这里\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ix.Sync(v); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := ix.Search("长笔记", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("got %d hits, want 1", len(hits))
+	}
+	if !utf8.ValidString(hits[0].Snippet) || !utf8.ValidString(hits[0].TitleHTML) {
+		t.Error("snippet or title is not valid UTF-8")
+	}
+	if len([]rune(hits[0].Snippet)) > 200 {
+		t.Errorf("snippet is %d runes, want a short window", len([]rune(hits[0].Snippet)))
+	}
+}
+
+// A tag holding a LIKE wildcard must match only itself.
+func TestTagScopeEscapesWildcards(t *testing.T) {
+	v, ix := newFixture(t)
+	a, _ := v.Create("", "下划线标签", "# 下划线标签\n")
+	b, _ := v.Create("", "相似标签", "# 相似标签\n")
+	if _, err := v.SetTags(a.Path, []string{"a_b"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.SetTags(b.Path, []string{"axb"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ix.Sync(v); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ix.List(Query{Scope: "tag", Value: "a_b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Title != "下划线标签" {
+		t.Errorf("tag a_b matched %d notes, want only its own", len(got))
+	}
+
+	// An empty tag is not a filter for untagged notes.
+	if empty, _ := ix.List(Query{Scope: "tag", Value: ""}); len(empty) != 0 {
+		t.Errorf("an empty tag scope returned %d notes, want none", len(empty))
+	}
+}
+
+func TestSummaryMatchesRows(t *testing.T) {
+	v, ix := newFixture(t)
+	seedFixture(t, v, ix)
+
+	sum, err := ix.Summary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	metas, _ := ix.List(Query{Scope: "all"})
+	words, bytes := 0, int64(0)
+	for _, m := range metas {
+		words += m.Words
+		bytes += m.Size
+	}
+	if sum.Notes != len(metas) || sum.Words != words || sum.Bytes != bytes {
+		t.Errorf("Summary = %+v, want notes=%d words=%d bytes=%d", sum, len(metas), words, bytes)
+	}
+}
+
+func TestRemoveUnderDropsOnlyThatSubtree(t *testing.T) {
+	v, ix := newFixture(t)
+	if _, err := v.Create("工作", "顶层", "# 顶层\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Create("工作/2026", "子级", "# 子级\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Create("学习", "别动我", "# 别动我\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ix.Sync(v); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ix.RemoveUnder("工作"); err != nil {
+		t.Fatal(err)
+	}
+	left, _ := ix.List(Query{Scope: "all"})
+	if len(left) != 1 || left[0].Title != "别动我" {
+		t.Errorf("RemoveUnder left %v, want only the note outside the folder", left)
 	}
 }
 

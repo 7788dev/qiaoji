@@ -6,6 +6,11 @@
   height: 100%;
   background: var(--bg-editor);
   overflow: hidden;
+  /* A container rather than a media query, because the column rules below have
+     to react to the width the shell actually has. Interface scaling shrinks
+     that width without changing the window, so a media query would never
+     notice the case that matters most. */
+  container: shell / inline-size;
 }
 
 .shell.is-zen {
@@ -242,6 +247,44 @@
 
 .body.is-grid .notelist {
   border-right: 0;
+}
+
+/* A collapsed column is zero-width but its buttons and rows are still in the
+   document, so without this Tab walks through controls nobody can see. */
+.body.is-sidebar-hidden > .sidebar,
+.body.is-list-hidden > .notelist {
+  visibility: hidden;
+}
+
+/* The two fixed columns are a large share of a narrow shell, and interface
+   scaling shrinks that shell further: at 150% in a minimum-size window they
+   left the editor about fifty pixels of text. They give ground before that
+   happens. */
+@container shell (max-width: 1080px) {
+  .body {
+    --sidebar-w: 176px;
+    --list-w: 244px;
+  }
+}
+
+@container shell (max-width: 880px) {
+  .body {
+    --sidebar-w: 152px;
+    --list-w: 210px;
+  }
+}
+
+/* Narrower still, the note list steps aside for the editor. It comes back
+   with Ctrl+\ or the list toggle, and grid view is unaffected because it owns
+   the whole content area anyway. */
+@container shell (max-width: 720px) {
+  .body:not(.is-grid) {
+    grid-template-columns: var(--sidebar-w) 0 1fr;
+  }
+
+  .body:not(.is-grid) > .notelist {
+    visibility: hidden;
+  }
 }
 
 /* ================================================================ sidebar */

@@ -76,15 +76,38 @@ export async function refreshList(): Promise<void> {
 export async function refreshSidebar(): Promise<void> {
   if (!state.ready) return;
   try {
-    const [folders, tags, stats] = await Promise.all([
-      api.listFolders(),
-      api.listTags(),
-      api.stats(),
-    ]);
-    setState({ folders, tags, stats });
+    const next = await api.sidebar();
+    // Handing back the previous arrays when nothing moved keeps the store from
+    // publishing, and the sidebar from rebuilding its nav tree and dropping
+    // whatever row had keyboard focus.
+    setState({
+      folders: keepIfSame(
+        state.folders,
+        next.folders,
+        (a, b) => a.path === b.path && a.name === b.name && a.count === b.count,
+      ),
+      tags: keepIfSame(state.tags, next.tags, (a, b) => a.name === b.name && a.count === b.count),
+      stats: sameStats(state.stats, next.stats) ? state.stats : next.stats,
+    });
   } catch (err) {
     reportError("读取侧边栏", err);
   }
+}
+
+function keepIfSame<T>(previous: T[], next: T[], equal: (a: T, b: T) => boolean): T[] {
+  if (previous.length !== next.length) return next;
+  return previous.every((item, i) => equal(item, next[i])) ? previous : next;
+}
+
+function sameStats(a: AppStats, b: AppStats): boolean {
+  return (
+    a.notes === b.notes &&
+    a.words === b.words &&
+    a.folders === b.folders &&
+    a.tags === b.tags &&
+    a.trash === b.trash &&
+    a.bytes === b.bytes
+  );
 }
 
 export async function refreshTrash(): Promise<void> {
@@ -145,16 +168,20 @@ function tabFromNote(note: Note): Tab {
   };
 }
 
-/** Persists the live editor buffer back into the tab before switching away. */
+/**
+ * Persists the live editor buffer back into the tab before switching away.
+ *
+ * The tab is mutated rather than replaced: this only ever catches the tab up
+ * with text the editor already shows, and republishing `tabs` here would
+ * repaint the strip and the note list on the save path.
+ */
 function captureEditorInto(tabId: string): void {
   if (!editor) return;
   const tab = state.tabs.find((t) => t.id === tabId);
   if (!tab) return;
-  patchTab(tabId, {
-    content: editor.doc,
-    cursor: editor.cursor,
-    scrollTop: editor.scrollTop,
-  });
+  tab.content = editor.doc;
+  tab.cursor = editor.cursor;
+  tab.scrollTop = editor.scrollTop;
 }
 
 export async function openNote(target: NoteMeta | string, options: { focus?: boolean } = {}): Promise<void> {
@@ -232,36 +259,60 @@ export function cycleTab(direction: 1 | -1): void {
 
 /* ---------------------------------------------------------------- saving */
 
-let saveTimer: number | undefined;
+/**
+ * Pending autosaves, keyed by tab.
+ *
+ * One shared timer meant switching tabs mid-edit cancelled the previous tab's
+ * write and never rescheduled it, leaving that buffer dirty until something
+ * else happened to flush it.
+ */
+const saveTimers = new Map<string, number>();
+
+function cancelScheduledSave(id: string): void {
+  const timer = saveTimers.get(id);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  saveTimers.delete(id);
+}
+
+function scheduleSave(id: string, delay: number): void {
+  cancelScheduledSave(id);
+  saveTimers.set(
+    id,
+    window.setTimeout(() => {
+      saveTimers.delete(id);
+      void saveTab(id, { silent: true });
+    }, delay),
+  );
+}
 
 /** Called on every keystroke; schedules the debounced write. */
 export function markDirty(content: string): void {
   const tab = activeTab();
   if (!tab) return;
-  patchTab(tab.id, { content });
 
+  // In place, on its own topic. Publishing a new `tabs` array per keystroke
+  // rebuilt every tab node and every visible note row for a single character.
+  tab.content = content;
   const dirty = content !== tab.savedContent;
-  setState({ saveState: dirty ? "dirty" : "idle" });
+  setState({
+    docRevision: state.docRevision + 1,
+    saveState: dirty ? "dirty" : "idle",
+  });
+
   if (!dirty) {
-    if (saveTimer) clearTimeout(saveTimer);
+    cancelScheduledSave(tab.id);
     return;
   }
   if (!state.settings.autoSave) return;
-
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => {
-    void saveTab(tab.id, { silent: true });
-  }, state.settings.autoSaveDelayMs);
+  scheduleSave(tab.id, state.settings.autoSaveDelayMs);
 }
 
 export async function saveTab(
   id: string,
   options: { silent?: boolean } = {},
 ): Promise<boolean> {
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = undefined;
-  }
+  cancelScheduledSave(id);
   if (id === state.activeTabId) captureEditorInto(id);
 
   const tab = state.tabs.find((t) => t.id === id);
@@ -273,6 +324,7 @@ export async function saveTab(
 
   setState({ saveState: "saving" });
   const content = tab.content;
+  const previousPath = tab.path;
   try {
     const meta = await api.saveNote(tab.path, content);
     patchTab(id, {
@@ -290,8 +342,12 @@ export async function saveTab(
       }, 1600);
     }
     if (!options.silent) notify.success("已保存");
-    void refreshList();
-    void refreshSidebar();
+
+    // A save changes one row, and a save cannot move a note out of the scope
+    // being shown. Re-querying the whole list and re-walking the vault for the
+    // sidebar after every autosave was the write path's dominant cost.
+    mergeNoteMeta(meta, previousPath);
+    refreshSidebarSoon();
     return true;
   } catch (err) {
     setState({ saveState: "error" });
@@ -300,18 +356,66 @@ export async function saveTab(
   }
 }
 
+/**
+ * Folds a freshly saved note back into the visible list, keeping the sort
+ * order the user chose.
+ */
+function mergeNoteMeta(meta: NoteMeta, previousPath: string): void {
+  if (state.searchHits !== null) return; // search results are the backend's
+  const index = state.notes.findIndex(
+    (n) => n.path === previousPath || n.path === meta.path || n.id === meta.id,
+  );
+  if (index < 0) return;
+
+  // Title order comes from SQLite's collation, which is not worth reproducing
+  // here. Editing a heading while sorted by title is rare enough to just ask
+  // the backend rather than risk the row settling in the wrong place.
+  if (state.sortBy === "title" && state.notes[index].title !== meta.title) {
+    void refreshList();
+    return;
+  }
+
+  const notes = state.notes.slice();
+  notes[index] = meta;
+  // A title-ordered list only moves when the title does, which the branch
+  // above already sent to the backend; re-sorting it by time here would
+  // reshuffle the whole list on every autosave.
+  if (state.sortBy !== "title") {
+    const key = state.sortBy === "created" ? "created" : "updated";
+    notes.sort((a, b) => Date.parse(b[key]) - Date.parse(a[key]));
+  }
+  setState({ notes });
+}
+
+/**
+ * The sidebar totals lag behind by design: they are library-wide numbers, and
+ * recomputing them per autosave is work nobody is watching. Typing keeps
+ * re-arming this, so it runs once after things settle.
+ */
+const refreshSidebarSoon = debounce(() => {
+  void refreshSidebar();
+}, 1500);
+
 export async function saveActive(options: { silent?: boolean } = {}): Promise<boolean> {
   const tab = activeTab();
   if (!tab) return false;
   return saveTab(tab.id, options);
 }
 
-/** Flushes every dirty buffer, used before closing the window. */
-export async function saveAll(): Promise<void> {
+/**
+ * Flushes every dirty buffer and reports whether all of them landed.
+ *
+ * The close handshake depends on the answer: quitting while a write failed
+ * would throw the edit away with no way to get it back.
+ */
+export async function saveAll(): Promise<boolean> {
   if (state.activeTabId) captureEditorInto(state.activeTabId);
-  for (const tab of state.tabs) {
-    if (isDirty(tab)) await saveTab(tab.id, { silent: true });
+  let ok = true;
+  for (const tab of [...state.tabs]) {
+    if (!isDirty(tab)) continue;
+    if (!(await saveTab(tab.id, { silent: true }))) ok = false;
   }
+  return ok;
 }
 
 /* ---------------------------------------------------------------- note ops */
@@ -406,14 +510,16 @@ export async function duplicateNote(path: string): Promise<void> {
 export async function deleteNote(path: string): Promise<void> {
   const tab = tabByPath(path);
   try {
-    await api.deleteNote(path);
+    // The backend hands back the trash entry it created, so "undo" restores
+    // exactly that note instead of guessing from a path.
+    const entry = await api.deleteNote(path);
     if (tab) await closeTab(tab.id, { skipPrompt: true });
     await Promise.all([refreshList(), refreshSidebar(), refreshTrash()]);
     notify.success("已移入回收站", {
       action: {
         label: "撤销",
         run: () => {
-          void undoDelete(path);
+          void undoDelete(entry.id);
         },
       },
     });
@@ -422,17 +528,12 @@ export async function deleteNote(path: string): Promise<void> {
   }
 }
 
-/** Restores the most recent trash entry that came from the given path. */
-async function undoDelete(originalPath: string): Promise<void> {
+async function undoDelete(entryID: string): Promise<void> {
+  if (!entryID) return;
   try {
-    const items = await api.listTrash();
-    const match =
-      items.find((item) => originalPath.replace(/\\/g, "/").endsWith(item.originalRel)) ??
-      items[0];
-    if (!match) return;
-    const meta = await api.restoreNote(match.id);
+    const restored = await api.restoreNote(entryID);
     await Promise.all([refreshList(), refreshSidebar(), refreshTrash()]);
-    await openNote(meta);
+    if (restored.kind === "note") await openNote(restored.note);
     notify.success("已还原");
   } catch (err) {
     reportError("撤销删除", err);
@@ -441,11 +542,16 @@ async function undoDelete(originalPath: string): Promise<void> {
 
 export async function restoreFromTrash(id: string): Promise<void> {
   try {
-    const meta = await api.restoreNote(id);
+    const restored = await api.restoreNote(id);
     await Promise.all([refreshList(), refreshSidebar(), refreshTrash()]);
-    notify.success(`已还原「${meta.title}」`);
+    if (restored.kind === "folder") {
+      notify.success(`已还原文件夹「${restored.folder}」`);
+      selectScope("folder", restored.folder);
+      return;
+    }
+    notify.success(`已还原「${restored.note.title}」`);
   } catch (err) {
-    reportError("还原笔记", err);
+    reportError("还原", err);
   }
 }
 
@@ -498,13 +604,20 @@ export async function renameFolder(path: string, name: string): Promise<void> {
 
 export async function deleteFolder(path: string): Promise<void> {
   try {
-    await api.deleteFolder(path);
+    const entry = await api.deleteFolder(path);
     if (state.scope === "folder" && state.scopeValue === path) {
       selectScope("all");
     }
     await Promise.all([refreshList(), refreshSidebar(), refreshTrash()]);
     await reconcileTabs();
-    notify.success("文件夹已删除，笔记已移入回收站");
+    notify.success("文件夹已移入回收站", {
+      action: {
+        label: "撤销",
+        run: () => {
+          void undoDelete(entry.id);
+        },
+      },
+    });
   } catch (err) {
     reportError("删除文件夹", err);
   }
@@ -611,25 +724,40 @@ export async function reconcileTabs(): Promise<void> {
   if (state.tabs.length === 0) return;
   if (state.activeTabId) captureEditorInto(state.activeTabId);
 
-  for (const tab of [...state.tabs]) {
-    if (isDirty(tab)) continue;
-    try {
-      const note = await api.getNote(tab.path, tab.id);
-      if (note.content === tab.savedContent && note.path === tab.path) continue;
-      patchTab(tab.id, {
-        path: note.path,
-        title: note.title,
-        folder: note.folder,
-        tags: note.tags ?? [],
-        favorite: note.favorite,
-        content: note.content,
-        savedContent: note.content,
-      });
-      if (tab.id === state.activeTabId) editor?.syncDoc(note.content);
-    } catch {
+  // Fetched together: an external change with several tabs open used to wait
+  // for one full round trip per tab, one after another.
+  const loaded = await Promise.all(
+    state.tabs
+      .filter((tab) => !isDirty(tab))
+      .map((tab) =>
+        api.getNote(tab.path, tab.id).then(
+          (note) => ({ id: tab.id, note }),
+          () => ({ id: tab.id, note: null }),
+        ),
+      ),
+  );
+
+  for (const { id, note } of loaded) {
+    const tab = state.tabs.find((t) => t.id === id);
+    if (!tab) continue;
+    if (!note) {
       // The note is gone; drop the tab rather than leave a dead one behind.
-      await closeTab(tab.id, { skipPrompt: true });
+      await closeTab(id, { skipPrompt: true });
+      continue;
     }
+    // The user may have started typing while the read was in flight.
+    if (isDirty(tab)) continue;
+    if (note.content === tab.savedContent && note.path === tab.path) continue;
+    patchTab(id, {
+      path: note.path,
+      title: note.title,
+      folder: note.folder,
+      tags: note.tags ?? [],
+      favorite: note.favorite,
+      content: note.content,
+      savedContent: note.content,
+    });
+    if (id === state.activeTabId) editor?.syncDoc(note.content);
   }
 }
 

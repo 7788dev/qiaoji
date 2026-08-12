@@ -2,16 +2,22 @@ import * as actions from "../actions";
 import * as api from "../api";
 import { MarkdownEditor, commands, insertSnippet } from "../lib/editor";
 import { debounce, el, icon, on } from "../lib/dom";
-import { outlineOf, preloadFor, render, type OutlineEntry } from "../lib/markdown";
+import {
+  modulesReadyFor,
+  outlineOf,
+  preloadFor,
+  render,
+  type OutlineEntry,
+} from "../lib/markdown";
 import {
   documentTemplates,
   snippetBody,
   snippetGroups,
   type SnippetGroup,
 } from "../lib/templates";
-import { activeTab, patchTab, setState, state, subscribe } from "../store";
-import { showMenu, type MenuEntry } from "./menu";
-import { notify } from "./toast";
+import { activeTab, patchTab, state, subscribe } from "../store";
+import { anchorRect, showMenu, type MenuEntry } from "./menu";
+import { notify, reportError } from "./toast";
 
 export interface EditorPaneHandlers {
   onCursor: (line: number, column: number, selected: number) => void;
@@ -82,6 +88,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
    * immediately once their module is in memory.
    */
   const ensureModules = debounce((doc: string) => {
+    if (modulesReadyFor(doc)) return;
     void preloadFor(doc).then(() => editor.refreshMath());
   }, 400);
 
@@ -170,7 +177,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
   /** Opens the insert menu anchored under its toolbar button. */
   function openInsertMenu(): void {
     const button = toolbar.querySelector<HTMLElement>('[data-insert="1"]');
-    const rect = button?.getBoundingClientRect();
+    const rect = button ? anchorRect(button) : undefined;
     showMenu(insertEntries(editor), {
       x: rect?.left ?? 200,
       y: (rect?.bottom ?? 100) + 4,
@@ -179,7 +186,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
 
   function headingMenu(): void {
     const anchor = toolbar.querySelector<HTMLElement>("button");
-    const rect = anchor?.getBoundingClientRect();
+    const rect = anchor ? anchorRect(anchor) : undefined;
     showMenu(
       [1, 2, 3, 4].map((level) => ({
         label: `${"#".repeat(level)} 标题 ${level}`,
@@ -205,16 +212,15 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     if (!tab) return;
     const source = editor.doc;
 
-    const first = render(source);
-    previewInner.innerHTML = first.html;
+    previewInner.innerHTML = render(source).html;
 
     // Maths and highlighting arrive asynchronously the first time they are
-    // needed; re-render once they are in so the output is complete.
-    if (first.hasMath || first.hasCode) {
-      await preloadFor(source);
-      if (activeTab()?.id !== tab.id) return;
-      previewInner.innerHTML = render(editor.doc).html;
-    }
+    // needed; re-render once they are in so the output is complete. Once both
+    // modules are in memory the second pass would render the same HTML twice.
+    if (modulesReadyFor(source)) return;
+    await preloadFor(source);
+    if (activeTab()?.id !== tab.id) return;
+    previewInner.innerHTML = render(editor.doc).html;
   }
 
   // Links inside the preview must not navigate the WebView away from the app.
@@ -242,18 +248,34 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     return activeTab()?.mode ?? "edit";
   }
 
-  function applyMode(): void {
+  let appliedMode: "edit" | "preview" | null = null;
+
+  /**
+   * Shows the editor or the preview.
+   *
+   * Focus only moves when the pane actually switched. Grabbing it on every
+   * call meant a background autosave or a tag edit could pull the caret out of
+   * whatever dialog or input the user was typing in.
+   */
+  function applyMode(options: { focus?: boolean } = {}): void {
     const tab = activeTab();
     const mode = tab?.mode ?? "edit";
     const previewing = mode === "preview";
+    const leftPreview = appliedMode === "preview" && mode === "edit";
+    appliedMode = tab ? mode : null;
 
     editorHost.hidden = !tab || previewing;
     preview.hidden = !tab || !previewing;
     emptyState.hidden = Boolean(tab);
     toolbar.hidden = !tab || previewing;
 
-    if (previewing) void paintPreview();
-    else if (tab) editor.focus();
+    if (previewing) {
+      void paintPreview();
+      return;
+    }
+    // Coming back from preview puts the caret back where the user was reading.
+    // Everything else leaves focus alone; whoever changed the tab decides.
+    if (tab && (options.focus ?? leftPreview)) editor.focus();
   }
 
   function setMode(mode: "edit" | "preview"): void {
@@ -272,7 +294,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     const tab = activeTab();
     if (!tab) return;
     const entries: OutlineEntry[] = outlineOf(editor.doc);
-    const rect = anchor.getBoundingClientRect();
+    const rect = anchorRect(anchor);
 
     if (entries.length === 0) {
       showMenu([{ label: "这篇笔记还没有标题", disabled: true }], {
@@ -308,6 +330,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     const tab = activeTab();
     if (!tab) {
       loadedTabId = null;
+      appliedMode = null;
       editor.loadDoc("", 0, 0);
       applyMode();
       return;
@@ -428,9 +451,13 @@ function installContextMenu(editor: MarkdownEditor): void {
         shortcut: "Ctrl+X",
         disabled: !hasSelection,
         run: () => {
-          void navigator.clipboard.writeText(selection).then(() => {
-            editor.replaceSelection("");
-          });
+          // The text is only removed once the clipboard actually has it, and a
+          // refusal is reported as a clipboard problem rather than surfacing
+          // as the generic unhandled-rejection toast.
+          navigator.clipboard.writeText(selection).then(
+            () => editor.replaceSelection(""),
+            (err: unknown) => reportError("剪切", err),
+          );
         },
       },
       {
@@ -438,7 +465,11 @@ function installContextMenu(editor: MarkdownEditor): void {
         icon: "copy",
         shortcut: "Ctrl+C",
         disabled: !hasSelection,
-        run: () => void navigator.clipboard.writeText(selection),
+        run: () => {
+          navigator.clipboard
+            .writeText(selection)
+            .catch((err: unknown) => reportError("复制", err));
+        },
       },
       {
         label: "粘贴",
@@ -467,7 +498,12 @@ function installContextMenu(editor: MarkdownEditor): void {
             icon: "strikethrough",
             run: () => editor.run(commands.strike),
           },
-          { label: "行内代码", icon: "codeTag", run: () => editor.run(commands.code) },
+          {
+            label: "行内代码",
+            icon: "codeTag",
+            shortcut: "Ctrl+E",
+            run: () => editor.run(commands.code),
+          },
           "separator",
           { label: "转为引用", icon: "quote", run: () => editor.run(commands.quote) },
           { label: "转为列表", icon: "bulletList", run: () => editor.run(commands.bullet) },
@@ -487,15 +523,16 @@ function installContextMenu(editor: MarkdownEditor): void {
 
 /** Keeps the document title in step with the active note. */
 export function bindDocumentTitle(): void {
+  let shown = "";
   const paint = () => {
     const tab = activeTab();
-    document.title = tab ? `${actions.tabTitle(tab)} — 巧记` : "巧记";
+    const next = tab ? `${actions.tabTitle(tab)} — 巧记` : "巧记";
+    // Assigning document.title is a window-manager round trip on Windows, so
+    // it is worth checking before writing it on every keystroke.
+    if (next === shown) return;
+    shown = next;
+    document.title = next;
   };
-  subscribe(["activeTabId", "tabs"], paint);
+  subscribe(["activeTabId", "tabs", "docRevision"], paint);
   paint();
-}
-
-/** Clears the transient "saved" flash if the window loses focus mid-timer. */
-export function resetSaveFlash(): void {
-  if (state.saveState === "saved") setState({ saveState: "idle" });
 }

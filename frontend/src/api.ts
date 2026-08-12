@@ -15,8 +15,10 @@ import type {
   ListQuery,
   Note,
   NoteMeta,
+  Restored,
   SearchHit,
   Settings,
+  SidebarData,
   Stats,
   Tag,
   TrashItem,
@@ -47,6 +49,9 @@ export const openVault = (path: string) =>
 export const selectVaultDir = () => call(() => Go.SelectVaultDir(), "选择文件夹");
 
 export const stats = () => call(() => Go.Stats(), "统计") as Promise<Stats>;
+
+/** Folders, tags and totals in one call, so a refresh walks the vault once. */
+export const sidebar = () => call(() => Go.Sidebar(), "读取侧边栏") as Promise<SidebarData>;
 
 export const rebuildIndex = () => call(() => Go.RebuildIndex(), "重建索引") as Promise<Stats>;
 
@@ -83,14 +88,15 @@ export const setFavorite = (path: string, favorite: boolean) =>
 export const setNoteTags = (path: string, tags: string[]) =>
   call(() => Go.SetNoteTags(path, tags), "更新标签") as Promise<NoteMeta>;
 
-export const deleteNote = (path: string) => call(() => Go.DeleteNote(path), "删除笔记");
+export const deleteNote = (path: string) =>
+  call(() => Go.DeleteNote(path), "删除笔记") as Promise<TrashItem>;
 
 /* ---------------------------------------------------------------- trash */
 
 export const listTrash = () => call(() => Go.ListTrash(), "读取回收站") as Promise<TrashItem[]>;
 
 export const restoreNote = (id: string) =>
-  call(() => Go.RestoreNote(id), "还原笔记") as Promise<NoteMeta>;
+  call(() => Go.RestoreNote(id), "还原") as Promise<Restored>;
 
 export const purgeTrashItem = (id: string) => call(() => Go.PurgeTrashItem(id), "彻底删除");
 
@@ -104,7 +110,8 @@ export const createFolder = (name: string) =>
 export const renameFolder = (path: string, name: string) =>
   call(() => Go.RenameFolder(path, name), "重命名文件夹");
 
-export const deleteFolder = (path: string) => call(() => Go.DeleteFolder(path), "删除文件夹");
+export const deleteFolder = (path: string) =>
+  call(() => Go.DeleteFolder(path), "删除文件夹") as Promise<TrashItem>;
 
 export const renameTag = (oldName: string, newName: string) =>
   call(() => Go.RenameTag(oldName, newName), "重命名标签");
@@ -153,6 +160,17 @@ export const windowMinimise = () => Go.WindowMinimise();
 export const windowToggleMaximise = () => Go.WindowToggleMaximise();
 export const windowIsMaximised = () => Go.WindowIsMaximised();
 export const windowClose = () => Go.WindowClose();
+
+/* ------------------------------------------------------------ close handshake */
+
+/** Releases the close the backend is holding open while buffers flush. */
+export const confirmClose = () => Go.ConfirmClose();
+
+/** Keeps the window open because something could not be written. */
+export const cancelClose = () => Go.CancelClose();
+
+/** Brings the window back, for when a problem needs attention from the tray. */
+export const showWindow = () => Go.ShowWindow();
 
 /* ---------------------------------------------------------------- events */
 

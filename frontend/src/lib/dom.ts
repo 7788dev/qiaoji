@@ -197,8 +197,13 @@ export function trapFocus(container: HTMLElement): () => void {
 
   const handler = (ev: KeyboardEvent) => {
     if (ev.key !== "Tab") return;
+    // checkVisibility rather than offsetParent: a fixed-position control has
+    // no offsetParent even when it is plainly on screen, and filtering it out
+    // would drop it from the tab cycle.
     const items = Array.from(container.querySelectorAll<HTMLElement>(selector)).filter(
-      (node) => node.offsetParent !== null || node === document.activeElement,
+      (node) =>
+        node === document.activeElement ||
+        (node.checkVisibility?.({ checkVisibilityCSS: true }) ?? node.offsetParent !== null),
     );
     if (items.length === 0) {
       ev.preventDefault();
