@@ -53,6 +53,7 @@ jobs:
       - name: Run quality gates
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           Push-Location frontend
           npx tsc --noEmit
           npm test
@@ -65,15 +66,30 @@ jobs:
         shell: pwsh
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
-          choco install nsis --no-progress -y
-          $nsis = "${env:ProgramFiles(x86)}\NSIS"
-          $nsis64 = "$env:ProgramFiles\NSIS"
-          if (Test-Path $nsis) { $nsis | Out-File -FilePath $env:GITHUB_PATH -Append }
-          if (Test-Path $nsis64) { $nsis64 | Out-File -FilePath $env:GITHUB_PATH -Append }
+          if ($LASTEXITCODE -ne 0) { throw "Failed to install Wails" }
+
+          $candidates = @("${env:ProgramFiles(x86)}\NSIS", "$env:ProgramFiles\NSIS")
+          $nsis = $candidates |
+            Where-Object { Test-Path (Join-Path $_ "makensis.exe") } |
+            Select-Object -First 1
+          for ($attempt = 1; !$nsis -and $attempt -le 3; $attempt++) {
+            choco install nsis --no-progress -y
+            $exitCode = $LASTEXITCODE
+            $nsis = $candidates |
+              Where-Object { Test-Path (Join-Path $_ "makensis.exe") } |
+              Select-Object -First 1
+            if (!$nsis -and $attempt -lt 3) {
+              Write-Warning "NSIS install attempt $attempt failed (exit $exitCode); retrying"
+              Start-Sleep -Seconds (15 * $attempt)
+            }
+          }
+          if (!$nsis) { throw "NSIS installation failed after 3 attempts" }
+          $nsis | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Build installer
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $true
           $env:CGO_ENABLED = "0"
           wails build -platform windows/amd64 -nsis -installscope user -trimpath -ldflags "-s -w -X qiaoji/internal/config.AppVersion=$env:RELEASE_VERSION"
 
