@@ -204,7 +204,13 @@ func TestSaveAssetCreatesSafeNoteRelativeImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(resolved, filepath.Join(v.Root(), "项目", "assets")+string(filepath.Separator)) {
+	assetsDir, err := filepath.EvalSymlinks(filepath.Join(filepath.Dir(n.Path), "assets"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetRel, err := filepath.Rel(assetsDir, resolved)
+	if err != nil || assetRel == ".." ||
+		strings.HasPrefix(assetRel, ".."+string(filepath.Separator)) {
 		t.Fatalf("asset escaped its note folder: %q", resolved)
 	}
 	if data, err := os.ReadFile(resolved); err != nil || !bytes.Equal(data, png) {
