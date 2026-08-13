@@ -294,23 +294,27 @@ export namespace main {
 		    return a;
 		}
 	}
-
+	
 	export class UpdateInfo {
 	    currentVersion: string;
 	    latestVersion: string;
 	    available: boolean;
 	    releaseUrl: string;
-
+	    installerUrl: string;
+	    sha256: string;
+	
 	    static createFrom(source: any = {}) {
 	        return new UpdateInfo(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.currentVersion = source["currentVersion"];
 	        this.latestVersion = source["latestVersion"];
 	        this.available = source["available"];
 	        this.releaseUrl = source["releaseUrl"];
+	        this.installerUrl = source["installerUrl"];
+	        this.sha256 = source["sha256"];
 	    }
 	}
 
