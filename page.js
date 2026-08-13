@@ -5,7 +5,6 @@
   var NAV = 52;
 
   var device = document.getElementById("device");
-  var pin = document.querySelector(".stage-pin");
   var ticking = false;
 
   function clamp(n, a, b) {
@@ -33,15 +32,12 @@
 
   function smallScale() {
     var availW = window.innerWidth - PAD;
-    return clamp(Math.min(availW / WIDTH, 0.58), 0.42, 0.58);
+    return clamp(Math.min(availW / WIDTH, 0.55), 0.4, 0.55);
   }
 
   function progress() {
-    if (!pin) return 0;
-    var start = pin.offsetTop - NAV;
-    var end = pin.offsetTop + pin.offsetHeight - window.innerHeight;
-    if (end <= start) return 0;
-    return clamp((window.scrollY - start) / (end - start), 0, 1);
+    var range = Math.max(window.innerHeight * 0.6, 280);
+    return clamp(window.scrollY / range, 0, 1);
   }
 
   function fit() {
@@ -52,8 +48,7 @@
       return;
     }
     var t = ease(progress());
-    var scale = largeScale() + (smallScale() - largeScale()) * t;
-    device.style.zoom = String(scale);
+    device.style.zoom = String(largeScale() + (smallScale() - largeScale()) * t);
   }
 
   function onScroll() {
@@ -71,7 +66,8 @@
   window.addEventListener("resize", fit);
 
   if (device) {
-    device.addEventListener(
+    var catcher = document.querySelector(".stage") || device;
+    catcher.addEventListener(
       "wheel",
       function (ev) {
         if (device.classList.contains("is-max")) return;
