@@ -128,8 +128,10 @@ func printHandlerQI(_, _, _ uintptr) uintptr { return 0 }
 func printHandlerAddRef(_ uintptr) uintptr   { return 1 }
 func printHandlerRelease(_ uintptr) uintptr  { return 1 }
 
-func printHandlerInvoke(this, errorCode, result uintptr) uintptr {
-	h := (*printToPdfHandler)(unsafe.Pointer(this))
+func printHandlerInvoke(this *printToPdfHandler, errorCode, result uintptr) uintptr {
+	if this == nil {
+		return 0
+	}
 	var err error
 	if errorCode != 0 {
 		err = windows.Errno(errorCode)
@@ -137,7 +139,7 @@ func printHandlerInvoke(this, errorCode, result uintptr) uintptr {
 		err = errors.New("PrintToPdf 未成功")
 	}
 	select {
-	case h.done <- err:
+	case this.done <- err:
 	default:
 	}
 	return 0
