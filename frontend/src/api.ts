@@ -153,6 +153,8 @@ export const applyTheme = (theme: string) => Go.ApplyTheme(theme);
 export const checkForUpdates = () =>
   call(() => Go.CheckForUpdates(), "检查更新") as Promise<UpdateInfo>;
 
+export const applyUpdate = () => call(() => Go.ApplyUpdate(), "安装更新");
+
 /* ---------------------------------------------------------------- export */
 
 export const selectExportDir = () => call(() => Go.SelectExportDir(), "选择保存位置");
@@ -193,7 +195,8 @@ export type BackendEvent =
   | "vault:changed"
   | "window:focus"
   | "tray:new-note"
-  | "app:before-close";
+  | "app:before-close"
+  | "update:progress";
 
 export function onBackend(event: BackendEvent, handler: (data?: unknown) => void): () => void {
   return EventsOn(event, handler);

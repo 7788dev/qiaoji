@@ -8,6 +8,8 @@ import {index} from '../models';
 
 export function ApplyTheme(arg1:string):Promise<void>;
 
+export function ApplyUpdate():Promise<void>;
+
 export function Bootstrap():Promise<main.Bootstrap>;
 
 export function CancelClose():Promise<void>;

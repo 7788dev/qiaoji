@@ -310,7 +310,10 @@ function checkUpdatesOnLaunch(): void {
         duration: 12_000,
         action: {
           label: "更新",
-          run: () => void api.openExternal(info.releaseUrl).catch((err) => reportError("打开仓库", err)),
+          run: () => {
+            notify.info("正在下载更新…");
+            void api.applyUpdate().catch((err) => reportError("安装更新", err));
+          },
         },
       });
     })

@@ -47,7 +47,7 @@
 
 > 安装包尚未使用商业代码签名。SmartScreen 可能提示「Windows 已保护你的电脑」。请只从本仓库 Releases 下载，核对 SHA-256 后，在提示中选择「更多信息」→「仍要运行」。
 
-已安装的版本可在应用内 **设置 → 关于** 检查更新（读取仓库中的 `version.json`）。下载与安装始终由你确认。
+已安装的版本可在应用内 **设置 → 关于** 检查更新。版本号走国内 CDN 读取仓库中的 `version.json`；有新版本时可直接下载安装包并覆盖安装。
 
 ---
 
@@ -129,7 +129,7 @@ npm test
 Pop-Location
 ```
 
-发新版时先把 `version.json` 里的 `version` 改成与标签一致，再打 `vX.Y.Z` 标签。应用内检查更新会通过国内 GitHub 加速源读取该文件。
+发新版时先把 `version.json` 里的 `version`、`installer` 和 `sha256` 改成与新安装包一致，再打 `vX.Y.Z` 标签。应用内检查更新会通过国内 CDN 读取该文件。
 
 升级 KaTeX 后执行 `go run ./tools/genkatex`。更换图标后执行 `python tools/genicon.py`（输入为 `UI/brand/icon-source.png`）。
 

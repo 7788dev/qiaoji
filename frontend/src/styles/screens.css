@@ -335,6 +335,22 @@
   font-size: var(--text-xs);
 }
 
+.about__update-progress {
+  width: 180px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--border);
+}
+
+.about__update-progress-bar {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
 .about__update-actions {
   display: flex;
   justify-content: center;

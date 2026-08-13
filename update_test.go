@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,6 +36,9 @@ func TestFetchLatestVersionFindsNewVersion(t *testing.T) {
 	}
 	if info.ReleaseURL != repoURL {
 		t.Fatalf("ReleaseURL = %q", info.ReleaseURL)
+	}
+	if info.InstallerURL != defaultInstallerURL("1.2.0") {
+		t.Fatalf("InstallerURL = %q", info.InstallerURL)
 	}
 }
 
@@ -122,12 +127,15 @@ func TestFetchLatestVersionReadsPlainText(t *testing.T) {
 }
 
 func TestFillUpdateInfoIgnoresDisallowedURL(t *testing.T) {
-	info := fillUpdateInfo("1.0.0", "1.0.1", "https://evil.example/update")
+	info := fillUpdateInfo("1.0.0", remoteVersion{Version: "1.0.1", Page: "https://evil.example/update"})
 	if info.ReleaseURL != repoURL {
 		t.Fatalf("ReleaseURL = %q", info.ReleaseURL)
 	}
 	if !info.Available {
 		t.Fatal("expected an available update")
+	}
+	if info.InstallerURL != defaultInstallerURL("1.0.1") {
+		t.Fatalf("InstallerURL = %q", info.InstallerURL)
 	}
 }
 
@@ -161,15 +169,21 @@ func TestRepoVersionFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tag, page, ok := parseVersionPayload(body)
+	remote, ok := parseVersionPayload(body)
 	if !ok {
 		t.Fatalf("could not parse version.json: %s", body)
 	}
-	if _, valid := parseReleaseVersion(tag); !valid {
-		t.Fatalf("invalid version %q", tag)
+	if _, valid := parseReleaseVersion(remote.Version); !valid {
+		t.Fatalf("invalid version %q", remote.Version)
 	}
-	if page != "" && !allowedReleaseURL(page) {
-		t.Fatalf("url %q is not the project repository", page)
+	if remote.Page != "" && !allowedReleaseURL(remote.Page) {
+		t.Fatalf("url %q is not the project repository", remote.Page)
+	}
+	if remote.Installer != "" && !allowedInstallerURL(remote.Installer) {
+		t.Fatalf("installer %q is not allowed", remote.Installer)
+	}
+	if remote.SHA256 != "" && !looksLikeSHA256(strings.ToLower(remote.SHA256)) {
+		t.Fatalf("sha256 %q is invalid", remote.SHA256)
 	}
 }
 
@@ -201,4 +215,70 @@ func TestParseReleaseVersion(t *testing.T) {
 			t.Errorf("accepted invalid version %q", invalid)
 		}
 	}
+}
+
+func TestAllowedInstallerURL(t *testing.T) {
+	allowed := []string{
+		defaultInstallerURL("1.0.1"),
+		"https://cdn.jsdmirror.com/gh/7788dev/qiaoji@main/Qiaoji-1.0.1-windows-amd64-setup.exe",
+	}
+	for _, raw := range allowed {
+		if !allowedInstallerURL(raw) {
+			t.Errorf("rejected %q", raw)
+		}
+	}
+	blocked := []string{
+		"",
+		"https://evil.example/Qiaoji-1.0.1-windows-amd64-setup.exe",
+		"https://github.com/other/qiaoji/releases/download/v1.0.1/Qiaoji-1.0.1-windows-amd64-setup.exe",
+		"https://github.com/7788dev/qiaoji/releases/download/v1.0.1/notes.md",
+		"http://github.com/7788dev/qiaoji/releases/download/v1.0.1/Qiaoji-1.0.1-windows-amd64-setup.exe",
+	}
+	for _, raw := range blocked {
+		if allowedInstallerURL(raw) {
+			t.Errorf("allowed %q", raw)
+		}
+	}
+}
+
+func TestChecksumForFile(t *testing.T) {
+	body := []byte("d0b78df8ea2e3d2e388daccf9e4aa7ad8cc6f76c7cec33c84416527b4bca1e24  Qiaoji-1.0.1-windows-amd64-setup.exe\n")
+	got := checksumForFile(body, "Qiaoji-1.0.1-windows-amd64-setup.exe")
+	if got != "d0b78df8ea2e3d2e388daccf9e4aa7ad8cc6f76c7cec33c84416527b4bca1e24" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSaveInstallerPayload(t *testing.T) {
+	payload := append([]byte("MZ"), bytesRepeat(0x41, 1024)...)
+	sum := sha256.Sum256(payload)
+	want := hex.EncodeToString(sum[:])
+
+	path, err := saveInstallerPayload(strings.NewReader(string(payload)), int64(len(payload)), want, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(payload) {
+		t.Fatal("saved installer did not match payload")
+	}
+
+	if _, err := saveInstallerPayload(strings.NewReader(string(payload)), int64(len(payload)), strings.Repeat("a", 64), nil); err == nil {
+		t.Fatal("expected checksum failure")
+	}
+	if _, err := saveInstallerPayload(strings.NewReader("not an exe"), 10, want, nil); err == nil {
+		t.Fatal("expected format failure")
+	}
+}
+
+func bytesRepeat(b byte, n int) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = b
+	}
+	return out
 }

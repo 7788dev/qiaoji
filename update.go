@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -19,31 +20,41 @@ const (
 	repoOwner = "7788dev"
 	repoName  = "qiaoji"
 	repoURL   = "https://github.com/" + repoOwner + "/" + repoName
-	// versionRawURL is the canonical GitHub raw file. The app never hits
-	// api.github.com; it reads this file through public China-friendly proxies.
-	versionRawURL = "https://raw.githubusercontent.com/" + repoOwner + "/" + repoName + "/main/version.json"
+	// versionCDNPath is served by jsDelivr-compatible CDNs. JSDMirror sits on
+	// Alibaba / Tencent / Huawei / Baidu, which is more stable in China than
+	// volunteer GitHub reverse proxies.
+	versionCDNPath = "gh/" + repoOwner + "/" + repoName + "@main/version.json"
 )
 
 var versionEndpoints = []string{
-	"https://gh-proxy.com/" + versionRawURL,
-	"https://ghfast.top/" + versionRawURL,
-	"https://gh.llkk.cc/" + versionRawURL,
-	"https://raw.gitmirror.com/" + repoOwner + "/" + repoName + "/main/version.json",
-	versionRawURL,
+	"https://cdn.jsdmirror.com/" + versionCDNPath,
+	"https://cdn.jsdmirror.cn/" + versionCDNPath,
+	"https://gcore.jsdelivr.net/" + versionCDNPath,
+	"https://fastly.jsdelivr.net/" + versionCDNPath,
+	"https://cdn.jsdelivr.net/" + versionCDNPath,
 }
 
-var updateClient = &http.Client{Timeout: 6 * time.Second}
+var updateClient = &http.Client{Timeout: 8 * time.Second}
 
-// UpdateInfo describes the latest published version. The app only compares
-// numbers and opens the repository; it never downloads or installs anything.
+type remoteVersion struct {
+	Version   string
+	Page      string
+	Installer string
+	SHA256    string
+}
+
+// UpdateInfo describes the latest published version. ApplyUpdate downloads the
+// installer itself; the repository URL is only a manual fallback.
 type UpdateInfo struct {
 	CurrentVersion string `json:"currentVersion"`
 	LatestVersion  string `json:"latestVersion"`
 	Available      bool   `json:"available"`
 	ReleaseURL     string `json:"releaseUrl"`
+	InstallerURL   string `json:"installerUrl"`
+	SHA256         string `json:"sha256"`
 }
 
-// CheckForUpdates reads version.json via a GitHub proxy. Network failures are
+// CheckForUpdates reads version.json via a mainland CDN. Network failures are
 // returned so automatic checks can stay quiet while a manual check can explain.
 func (a *App) CheckForUpdates() (UpdateInfo, error) {
 	ctx := a.ctx
@@ -69,12 +80,12 @@ func fetchLatestVersion(
 
 	var lastErr error
 	for _, endpoint := range endpoints {
-		tag, page, err := fetchVersionFile(ctx, client, endpoint, current)
+		remote, err := fetchVersionFile(ctx, client, endpoint, current)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		return fillUpdateInfo(current, tag, page), nil
+		return fillUpdateInfo(current, remote), nil
 	}
 	if lastErr == nil {
 		lastErr = errors.New("无法检查更新")
@@ -82,18 +93,25 @@ func fetchLatestVersion(
 	return out, lastErr
 }
 
-func fillUpdateInfo(current, tag, page string) UpdateInfo {
+func fillUpdateInfo(current string, remote remoteVersion) UpdateInfo {
 	out := UpdateInfo{
 		CurrentVersion: current,
 		ReleaseURL:     repoURL,
 	}
-	latest, ok := parseReleaseVersion(tag)
+	latest, ok := parseReleaseVersion(remote.Version)
 	if !ok {
 		return out
 	}
-	out.LatestVersion = strings.TrimPrefix(strings.TrimPrefix(tag, "v"), "V")
-	if allowedReleaseURL(page) {
-		out.ReleaseURL = page
+	out.LatestVersion = strings.TrimPrefix(strings.TrimPrefix(remote.Version, "v"), "V")
+	if allowedReleaseURL(remote.Page) {
+		out.ReleaseURL = remote.Page
+	}
+	out.InstallerURL = defaultInstallerURL(out.LatestVersion)
+	if allowedInstallerURL(remote.Installer) {
+		out.InstallerURL = remote.Installer
+	}
+	if sum := strings.ToLower(strings.TrimSpace(remote.SHA256)); looksLikeSHA256(sum) {
+		out.SHA256 = sum
 	}
 	if installed, ok := parseReleaseVersion(current); ok {
 		out.Available = compareReleaseVersion(latest, installed) > 0
@@ -101,55 +119,82 @@ func fillUpdateInfo(current, tag, page string) UpdateInfo {
 	return out
 }
 
-func fetchVersionFile(ctx context.Context, client *http.Client, endpoint, current string) (string, string, error) {
+func fetchVersionFile(ctx context.Context, client *http.Client, endpoint, current string) (remoteVersion, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", "", err
+		return remoteVersion{}, err
 	}
 	request.Header.Set("Accept", "application/json, text/plain;q=0.9, */*;q=0.8")
+	request.Header.Set("Cache-Control", "no-cache")
 	request.Header.Set("User-Agent", "Qiaoji/"+current)
 
 	response, err := client.Do(request)
 	if err != nil {
-		return "", "", errors.New("无法获取版本信息")
+		return remoteVersion{}, errors.New("无法获取版本信息")
 	}
 	defer response.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<16))
 	if err != nil {
-		return "", "", errors.New("无法读取版本信息")
+		return remoteVersion{}, errors.New("无法读取版本信息")
 	}
 	if response.StatusCode != http.StatusOK {
-		return "", "", versionStatusError(response.StatusCode)
+		return remoteVersion{}, versionStatusError(response.StatusCode)
 	}
 
-	tag, page, ok := parseVersionPayload(body)
+	remote, ok := parseVersionPayload(body)
 	if !ok {
-		return "", "", errors.New("版本信息格式无效")
+		return remoteVersion{}, errors.New("版本信息格式无效")
 	}
-	return tag, page, nil
+	return remote, nil
 }
 
-func parseVersionPayload(body []byte) (string, string, bool) {
+func parseVersionPayload(body []byte) (remoteVersion, bool) {
 	trimmed := strings.TrimSpace(string(bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))))
 	if trimmed == "" {
-		return "", "", false
+		return remoteVersion{}, false
 	}
 
 	var file struct {
-		Version string `json:"version"`
-		URL     string `json:"url"`
+		Version   string `json:"version"`
+		URL       string `json:"url"`
+		Installer string `json:"installer"`
+		SHA256    string `json:"sha256"`
 	}
 	if json.Unmarshal([]byte(trimmed), &file) == nil && strings.TrimSpace(file.Version) != "" {
 		if _, ok := parseReleaseVersion(file.Version); !ok {
-			return "", "", false
+			return remoteVersion{}, false
 		}
-		return strings.TrimSpace(file.Version), strings.TrimSpace(file.URL), true
+		return remoteVersion{
+			Version:   strings.TrimSpace(file.Version),
+			Page:      strings.TrimSpace(file.URL),
+			Installer: strings.TrimSpace(file.Installer),
+			SHA256:    strings.TrimSpace(file.SHA256),
+		}, true
 	}
 	if _, ok := parseReleaseVersion(trimmed); !ok {
-		return "", "", false
+		return remoteVersion{}, false
 	}
-	return trimmed, "", true
+	return remoteVersion{Version: trimmed}, true
+}
+
+func defaultInstallerURL(version string) string {
+	return fmt.Sprintf(
+		"https://github.com/%s/%s/releases/download/v%s/Qiaoji-%s-windows-amd64-setup.exe",
+		repoOwner,
+		repoName,
+		version,
+		version,
+	)
+}
+
+func defaultChecksumURL(version string) string {
+	return fmt.Sprintf(
+		"https://github.com/%s/%s/releases/download/v%s/SHA256SUMS.txt",
+		repoOwner,
+		repoName,
+		version,
+	)
 }
 
 func allowedReleaseURL(raw string) bool {

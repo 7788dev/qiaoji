@@ -6,6 +6,10 @@ export function ApplyTheme(arg1) {
   return window['go']['main']['App']['ApplyTheme'](arg1);
 }
 
+export function ApplyUpdate() {
+  return window['go']['main']['App']['ApplyUpdate']();
+}
+
 export function Bootstrap() {
   return window['go']['main']['App']['Bootstrap']();
 }

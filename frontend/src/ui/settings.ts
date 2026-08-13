@@ -174,7 +174,7 @@ export function openSettings(deps: SettingsDeps, initial: SectionId = "general")
       toggle("关闭时最小化到托盘", "点击关闭按钮时保持后台运行", s.closeToTray, (v) =>
         update({ closeToTray: v }),
       ),
-      toggle("自动检查更新", "启动时检查仓库版本号，不会自动下载安装", s.autoUpdate, (v) =>
+      toggle("自动检查更新", "启动时检查新版本，发现后可一键下载覆盖安装", s.autoUpdate, (v) =>
         update({ autoUpdate: v }),
       ),
       toggle(
@@ -655,6 +655,9 @@ export function openAbout(): void {
     state.settings.autoUpdate ? "已开启启动时自动检查更新" : "启动时自动检查更新已关闭",
   );
   let releaseUrl = "";
+  let updateAction: "apply" | "repo" = "apply";
+  const progressBar = el("span", { class: "about__update-progress-bar" });
+  const progressWrap = el("div", { class: "about__update-progress", hidden: true }, progressBar);
   const releaseButton = el(
     "button",
     {
@@ -662,9 +665,43 @@ export function openAbout(): void {
       type: "button",
       hidden: true,
       onclick: () => {
-        if (releaseUrl) {
-          void api.openExternal(releaseUrl).catch((err) => reportError("打开仓库", err));
+        if (updateAction === "repo") {
+          if (releaseUrl) {
+            void api.openExternal(releaseUrl).catch((err) => reportError("打开仓库", err));
+          }
+          return;
         }
+        releaseButton.disabled = true;
+        checkButton.disabled = true;
+        progressWrap.hidden = false;
+        progressBar.style.width = "0%";
+        updateStatus.textContent = "正在下载安装包…";
+        const stopProgress = api.onBackend("update:progress", (raw) => {
+          const data = raw as { stage?: string; percent?: number } | undefined;
+          const percent = Math.max(0, Math.min(100, data?.percent ?? 0));
+          progressBar.style.width = `${percent}%`;
+          if (data?.stage === "download") {
+            updateStatus.textContent = percent > 0 ? `正在下载安装包 ${percent}%` : "正在下载安装包…";
+          } else if (data?.stage === "verify") {
+            updateStatus.textContent = "正在校验安装包…";
+          } else if (data?.stage === "install") {
+            updateStatus.textContent = "即将关闭并覆盖安装…";
+          }
+        });
+        void api
+          .applyUpdate()
+          .catch((err) => {
+            progressWrap.hidden = true;
+            releaseButton.disabled = false;
+            checkButton.disabled = false;
+            reportError("安装更新", err);
+            updateStatus.textContent = "自动更新失败，可手动打开仓库下载";
+            updateAction = "repo";
+            releaseUrl = releaseUrl || "https://github.com/7788dev/qiaoji";
+            releaseButton.replaceChildren("打开仓库");
+            releaseButton.hidden = false;
+          })
+          .finally(() => stopProgress());
       },
     },
     "更新",
@@ -679,11 +716,13 @@ export function openAbout(): void {
         checkButton.replaceChildren(el("span", { class: "spinner" }), "检查中…");
         updateStatus.textContent = "正在检查新版本…";
         releaseButton.hidden = true;
+        progressWrap.hidden = true;
         try {
           const info = await api.checkForUpdates();
           releaseUrl = info.releaseUrl;
           if (info.available) {
-            updateStatus.textContent = `发现新版本 ${info.latestVersion}，可前往仓库下载`;
+            updateStatus.textContent = `发现新版本 ${info.latestVersion}`;
+            updateAction = "apply";
             releaseButton.replaceChildren("更新");
             releaseButton.hidden = false;
           } else if (info.currentVersion === "dev") {
@@ -694,6 +733,7 @@ export function openAbout(): void {
         } catch (err) {
           updateStatus.textContent = "无法在线检查，可手动打开仓库";
           releaseUrl = "https://github.com/7788dev/qiaoji";
+          updateAction = "repo";
           releaseButton.replaceChildren("打开仓库");
           releaseButton.hidden = false;
           reportError("检查更新", err);
@@ -728,6 +768,7 @@ export function openAbout(): void {
         "div",
         { class: "about__update" },
         updateStatus,
+        progressWrap,
         el("div", { class: "about__update-actions" }, checkButton, releaseButton),
       ),
       el("div", { class: "about__copyright" }, "© 2026 巧记"),
