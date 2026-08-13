@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:;"
+    />
+    <title>巧记 — 本地 Markdown 笔记</title>
+    <meta name="description" content="巧记是一款本地优先的 Windows Markdown 笔记应用。本页中间就是可操作的完整界面，不是截图。" />
+    <link rel="icon" href="./mark.png" />
+    <script src="./theme-guard.js"></script>
+    <script src="./demo-backend.js"></script>
+    <script type="module" crossorigin src="./assets/index-DsKTtC0Y.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/markdown-BN1BNkpz.js">
+    <link rel="modulepreload" crossorigin href="./assets/editor-BiDhzWF9.js">
+    <link rel="stylesheet" crossorigin href="./assets/style-DjvzYaPo.css">
+  </head>
+  <body>
+    <header class="site-nav">
+      <a class="site-nav__brand" href="#">
+        <img src="./mark.png" alt="" width="28" height="28" />
+        巧记
+      </a>
+      <span class="site-nav__note">完整界面，可以直接点 · 不是截图</span>
+      <nav class="site-nav__links">
+        <a href="https://github.com/7788dev/qiaoji">GitHub</a>
+        <a class="site-nav__cta" href="https://github.com/7788dev/qiaoji/releases/latest">下载 Windows 版</a>
+      </nav>
+    </header>
+    <div class="device" id="device">
+      <div class="dock-chip">
+        <img src="./mark.png" alt="" />
+        巧记
+      </div>
+      <div id="app"></div>
+    </div>
+  </body>
+</html>
