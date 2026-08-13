@@ -1,9 +1,7 @@
 (function () {
   var WIDTH = 1240;
-  var HEIGHT = 820;
-  var NAV = 52;
-  var PAD = 40;
-  var MAX = 0.82;
+  var PAD = 48;
+  var MAX = 0.68;
 
   function fit() {
     var el = document.getElementById("device");
@@ -12,12 +10,8 @@
       el.style.zoom = "";
       return;
     }
-    var scale = Math.min(
-      (window.innerWidth - PAD) / WIDTH,
-      (window.innerHeight - NAV - PAD) / HEIGHT,
-      MAX,
-    );
-    el.style.zoom = String(Math.max(0.5, scale));
+    var scale = Math.min((window.innerWidth - PAD) / WIDTH, MAX);
+    el.style.zoom = String(Math.max(0.42, scale));
   }
 
   window.addEventListener("resize", fit);

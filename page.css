@@ -1,10 +1,81 @@
-/* Scale the live app window down, keeping the 1240×820 layout intact. */
+/* Product page around the live app. Overrides the desktop-shell body lock. */
+
+html,
+body {
+  height: auto !important;
+  min-height: 100% !important;
+  overflow: auto !important;
+  overflow-x: hidden !important;
+}
+
+body {
+  display: block !important;
+  background: #f5f5f7 !important;
+  color: #1d1d1f;
+  cursor: auto;
+  user-select: text;
+}
+
+.site-nav {
+  position: sticky;
+  top: 0;
+}
+
+.hero {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 56px 24px 28px;
+  text-align: center;
+}
+
+.hero__mark {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 18px;
+  border-radius: 16px;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(40px, 6vw, 64px);
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+}
+
+.hero__lead {
+  margin: 14px 0 0;
+  font-size: 21px;
+  letter-spacing: -0.02em;
+}
+
+.hero__sub {
+  margin: 10px 0 0;
+  color: #6e6e73;
+  font-size: 17px;
+  line-height: 1.55;
+  letter-spacing: -0.015em;
+}
+
+.hero code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.stage {
+  display: flex;
+  justify-content: center;
+  padding: 8px 20px 56px;
+}
+
 .device {
   flex: none !important;
   width: 1240px !important;
   height: 820px !important;
   min-height: 0 !important;
-  margin: auto !important;
+  margin: 0 auto !important;
+  user-select: none;
+  cursor: default;
 }
 
 .device.is-max {
@@ -18,4 +89,143 @@
   height: 48px !important;
   zoom: 1 !important;
   margin: 0 !important;
+}
+
+.docs {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 8px 24px 48px;
+  color: #1d1d1f;
+}
+
+.docs__block {
+  padding: 28px 0 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.docs__block h2 {
+  margin: 0 0 16px;
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.docs__block p {
+  margin: 0 0 12px;
+  color: #3d3d42;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.docs__block a {
+  color: #0071e3;
+}
+
+.docs .note {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  color: #6e6e73;
+  font-size: 14px;
+}
+
+.features {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 28px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.features li {
+  color: #3d3d42;
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.features strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #1d1d1f;
+  font-size: 16px;
+}
+
+.tree {
+  margin: 0 0 16px;
+  padding: 16px 18px;
+  overflow-x: auto;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #3d3d42;
+}
+
+.keys {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.keys th,
+.keys td {
+  padding: 10px 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  text-align: left;
+}
+
+.keys th {
+  color: #6e6e73;
+  font-weight: 550;
+  font-size: 12px;
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.docs .site-nav__cta {
+  margin-top: 8px;
+}
+
+.foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 8px 24px 40px;
+  color: #6e6e73;
+  font-size: 13px;
+}
+
+.foot a {
+  color: #0071e3;
+}
+
+@media (max-width: 720px) {
+  .hero {
+    padding: 36px 20px 20px;
+  }
+
+  .features {
+    grid-template-columns: 1fr;
+  }
+
+  .keys td:nth-child(3),
+  .keys td:nth-child(4),
+  .keys th:nth-child(3),
+  .keys th:nth-child(4) {
+    display: none;
+  }
 }

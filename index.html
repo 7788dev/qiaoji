@@ -8,15 +8,18 @@
       content="default-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:;"
     />
     <title>巧记 — 本地 Markdown 笔记</title>
-    <meta name="description" content="巧记是一款本地优先的 Windows Markdown 笔记应用。本页中间就是可操作的完整界面，不是截图。" />
+    <meta
+      name="description"
+      content="巧记是一款本地优先的 Windows Markdown 笔记应用。笔记就是磁盘上的 .md 文件：不锁定、可同步，卸载后数据仍在。"
+    />
     <link rel="icon" href="./mark.png" />
     <script src="./theme-guard.js"></script>
     <script src="./demo-backend.js"></script>
     <script type="module" crossorigin src="./assets/index-DsKTtC0Y.js"></script>
-    <link rel="modulepreload" crossorigin href="./assets/markdown-BN1BNkpz.js">
-    <link rel="modulepreload" crossorigin href="./assets/editor-BiDhzWF9.js">
-    <link rel="stylesheet" crossorigin href="./assets/style-DjvzYaPo.css">
-    <link rel="stylesheet" href="./page.css">
+    <link rel="modulepreload" crossorigin href="./assets/markdown-BN1BNkpz.js" />
+    <link rel="modulepreload" crossorigin href="./assets/editor-BiDhzWF9.js" />
+    <link rel="stylesheet" crossorigin href="./assets/style-DjvzYaPo.css" />
+    <link rel="stylesheet" href="./page.css" />
   </head>
   <body>
     <header class="site-nav">
@@ -25,17 +28,140 @@
         巧记
       </a>
       <nav class="site-nav__links">
+        <a href="#features">特性</a>
+        <a href="#install">安装</a>
         <a href="https://github.com/7788dev/qiaoji">GitHub</a>
         <a class="site-nav__cta" href="https://github.com/7788dev/qiaoji/releases/latest">下载 Windows 版</a>
       </nav>
     </header>
-    <div class="device" id="device">
-      <div class="dock-chip">
-        <img src="./mark.png" alt="" />
-        巧记
+
+    <section class="hero">
+      <img class="hero__mark" src="./mark.png" alt="" width="72" height="72" />
+      <h1>巧记</h1>
+      <p class="hero__lead">本地优先的 Windows Markdown 笔记应用。</p>
+      <p class="hero__sub">笔记就是磁盘上的 <code>.md</code> 文件：不锁定、可同步，卸载后数据仍在。</p>
+    </section>
+
+    <section class="stage" aria-label="界面演示">
+      <div class="device" id="device">
+        <div class="dock-chip">
+          <img src="./mark.png" alt="" />
+          巧记
+        </div>
+        <div id="app"></div>
       </div>
-      <div id="app"></div>
-    </div>
+    </section>
+
+    <main class="docs">
+      <section class="docs__block" id="features">
+        <h2>特性</h2>
+        <ul class="features">
+          <li>
+            <strong>本地优先</strong>
+            笔记以 Markdown 文件保存在你指定的目录，可用任意编辑器打开，也可丢进网盘或 Git。
+          </li>
+          <li>
+            <strong>实时编辑</strong>
+            标题按真实字号显示，语法标记保持可见可改；公式在编辑时即排版，光标移入还原为 TeX。
+          </li>
+          <li>
+            <strong>组织</strong>
+            文件夹、标签、收藏、最近使用、回收站；侧边栏与列表均可折叠。
+          </li>
+          <li>
+            <strong>搜索</strong>
+            SQLite FTS5 全文检索，结果带高亮片段；<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> 同时搜命令与笔记。
+          </li>
+          <li>
+            <strong>公式与代码</strong>
+            KaTeX 行内 / 块级公式；26 种语言按需高亮。
+          </li>
+          <li>
+            <strong>图片</strong>
+            粘贴截图或拖入 PNG / JPEG / GIF / WebP，文件落在笔记旁的 <code>assets/</code>。
+          </li>
+          <li>
+            <strong>导出</strong>
+            Markdown、HTML、PDF、Word、纯文本。PDF 走应用内 WebView2 排版，与预览一致。
+          </li>
+          <li>
+            <strong>体积</strong>
+            单个安装包约 19 MB，不内嵌 Chromium。右键或工具栏可插入会议纪要、日报、周报等模板。
+          </li>
+        </ul>
+      </section>
+
+      <section class="docs__block" id="install">
+        <h2>安装</h2>
+        <p>
+          从
+          <a href="https://github.com/7788dev/qiaoji/releases/latest">Releases</a>
+          下载 <code>Qiaoji-&lt;版本&gt;-windows-amd64-setup.exe</code>。发布页附带
+          <code>SHA256SUMS.txt</code>，可用于校验文件完整性。
+        </p>
+        <p>系统要求：Windows 10 / 11，已安装 WebView2 运行时（系统通常已自带）。</p>
+        <p class="note">
+          安装包尚未使用商业代码签名。SmartScreen 可能提示「Windows 已保护你的电脑」。请只从本仓库 Releases
+          下载，核对 SHA-256 后，在提示中选择「更多信息」→「仍要运行」。
+        </p>
+        <p>
+          已安装的版本可在应用内 <strong>设置 → 关于</strong> 检查更新。有新版本时可直接下载安装包并覆盖安装。
+        </p>
+        <p>
+          <a class="site-nav__cta" href="https://github.com/7788dev/qiaoji/releases/latest">下载 Windows 版</a>
+        </p>
+      </section>
+
+      <section class="docs__block" id="data">
+        <h2>数据</h2>
+        <pre class="tree"><code>%USERPROFILE%\Documents\巧记\     笔记库（可在设置中更改）
+├─ 工作\  学习\  项目\  日常\
+├─ 欢迎使用巧记.md
+└─ .qiaoji\
+   ├─ index.db                   搜索索引（可删，下次启动重建）
+   ├─ vault.json                 初始化标记
+   └─ trash\                     回收站
+
+%APPDATA%\巧记\settings.json     窗口、主题、导出路径等</code></pre>
+        <p>
+          每篇笔记的元数据写在 YAML front matter 中。巧记只维护
+          <code>id</code>、<code>title</code>、<code>tags</code>、<code>created</code>、<code>updated</code>、<code>favorite</code>；其它字段会原样保留。
+        </p>
+        <p>
+          删除单篇笔记会移入 <code>.qiaoji/trash</code>；删除文件夹会连同其中的图片和附件一起进入回收站。
+        </p>
+      </section>
+
+      <section class="docs__block" id="shortcuts">
+        <h2>快捷键</h2>
+        <table class="keys">
+          <thead>
+            <tr>
+              <th>操作</th>
+              <th>快捷键</th>
+              <th>操作</th>
+              <th>快捷键</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>新建笔记</td><td><kbd>Ctrl</kbd> + <kbd>N</kbd></td><td>加粗</td><td><kbd>Ctrl</kbd> + <kbd>B</kbd></td></tr>
+            <tr><td>保存</td><td><kbd>Ctrl</kbd> + <kbd>S</kbd></td><td>斜体</td><td><kbd>Ctrl</kbd> + <kbd>I</kbd></td></tr>
+            <tr><td>导出</td><td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>E</kbd></td><td>行内代码</td><td><kbd>Ctrl</kbd> + <kbd>E</kbd></td></tr>
+            <tr><td>关闭标签</td><td><kbd>Ctrl</kbd> + <kbd>W</kbd></td><td>插入链接</td><td><kbd>Ctrl</kbd> + <kbd>K</kbd></td></tr>
+            <tr><td>查找 / 替换</td><td><kbd>Ctrl</kbd> + <kbd>F</kbd> / <kbd>H</kbd></td><td>任务项</td><td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>L</kbd></td></tr>
+            <tr><td>全文搜索</td><td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd></td><td>一至四级标题</td><td><kbd>Ctrl</kbd> + <kbd>1</kbd> … <kbd>4</kbd></td></tr>
+            <tr><td>命令面板</td><td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd></td><td>预览</td><td><kbd>Ctrl</kbd> + <kbd>P</kbd></td></tr>
+            <tr><td>设置</td><td><kbd>Ctrl</kbd> + <kbd>,</kbd></td><td>侧边栏</td><td><kbd>Ctrl</kbd> + <kbd>\</kbd></td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <span>© 2026 巧记 · MIT</span>
+      <a href="https://github.com/7788dev/qiaoji">GitHub</a>
+    </footer>
+
     <script src="./page.js"></script>
   </body>
 </html>
