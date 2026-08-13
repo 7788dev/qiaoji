@@ -1,185 +1,123 @@
-# 巧记
+<p align="center">
+  <img src="frontend/src/assets/mark.png" width="72" alt="巧记">
+</p>
 
-<img src="UI/brand/logo.png" alt="巧记" width="286">
+<h1 align="center">巧记</h1>
 
+<p align="center">
+  本地优先的 Windows Markdown 笔记应用。<br>
+  笔记就是磁盘上的 <code>.md</code> 文件：不锁定、可同步，卸载后数据仍在。
+</p>
 
-轻量 · 高效 · 专注的本地 Markdown 笔记应用。按 `UI/` 目录下的原型图实现，Go + Wails v2 编写，打包为单个 Windows 可执行文件。
+<p align="center">
+  <a href="https://github.com/7788dev/qiaoji/releases/latest"><img src="https://img.shields.io/github/v/release/7788dev/qiaoji?style=flat-square" alt="Release"></a>
+  <a href="https://github.com/7788dev/qiaoji/releases/latest"><img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Windows"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/7788dev/qiaoji?style=flat-square" alt="License"></a>
+  <a href="https://github.com/7788dev/qiaoji/releases"><img src="https://img.shields.io/github/downloads/7788dev/qiaoji/total?style=flat-square" alt="Downloads"></a>
+</p>
 
-笔记就是磁盘上的 `.md` 文件。应用不锁定任何数据：随时可以用别的编辑器打开、丢进网盘或 Git 同步，卸载后笔记依旧在。
+<p align="center">
+  <a href="#安装">安装</a> ·
+  <a href="#特性">特性</a> ·
+  <a href="#数据">数据</a> ·
+  <a href="#快捷键">快捷键</a> ·
+  <a href="#从源码构建">构建</a>
+</p>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="UI/screenshots/main-dark.png">
-  <img src="UI/screenshots/main-light.png" alt="巧记主界面" width="100%">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="UI/screenshots/main-dark.png">
+    <img src="UI/screenshots/main-light.png" alt="巧记主界面" width="100%">
+  </picture>
+</p>
 
----
-
-## 下载
-
-从 [GitHub Releases](https://github.com/7788dev/qiaoji/releases) 下载
-`Qiaoji-<版本>-windows-amd64-setup.exe`。发布页同时提供 `SHA256SUMS.txt`
-用于校验文件完整性。
-
-当前安装包尚未使用商业代码签名证书，因此 Windows SmartScreen 可能显示
-「Windows 已保护你的电脑」。请只从本仓库的 Releases 页面下载，并在运行前核对
-SHA-256；点击「更多信息」后可以选择「仍要运行」。
-
----
-
-## 实测数据
-
-在 Windows 11 24H2 / Ryzen 9 7945HX 上测得：
-
-| 指标 | 数值 |
-| --- | --- |
-| 可执行文件 | 18.7 MB（单文件，无需安装运行时） |
-| 首次启动 | 1675 ms（含创建笔记库与写入示例笔记） |
-| 日常启动 | 721 ms（到窗口可见） |
-| 常驻内存 | 170–190 MB 私有工作集 |
-| 1200 篇笔记冷建索引 | 444 ms |
-| 1200 篇笔记热启动 | 5 ms |
-| 全文搜索（≥3 字） | 5 ms |
-| 中文两字搜索（LIKE 回退） | 2 ms |
-
-内存按**私有工作集**统计。任务管理器显示的「工作集」约 440 MB，那个数字把 Chromium 多个进程共享的代码页重复计算了好几遍，并不代表真实占用。典型构成：
-
-| 进程 | 私有内存 |
-| --- | --- |
-| GPU 进程 | 79–106 MB（随显卡驱动波动，本机有双显卡） |
-| 渲染进程 | 约 34 MB |
-| 浏览器进程 | 约 32 MB |
-| Go 主进程 | 约 12 MB |
-| 辅助进程 | 约 12 MB |
-
-Go 主进程只占 12 MB —— 剩下的几乎全是 WebView2，其中 GPU 进程占了大头。这是选择 WebView2 的代价，换来的是与原型完全一致的界面、KaTeX 公式排版和所见即所得的 PDF 导出。设置里的「硬件加速」开关**不会**降低内存：关掉之后 Chromium 依然会保留 GPU 进程做软件合成，实测反而更高，所以那个开关只作为显示异常时的排查手段。
+<p align="center">
+  <img src="UI/screenshots/preview.png" width="32%" alt="预览">
+  <img src="UI/screenshots/export.png" width="32%" alt="导出">
+  <img src="UI/screenshots/settings.png" width="32%" alt="设置">
+</p>
 
 ---
 
-## 功能
+## 安装
 
-- **三栏布局**：笔记库导航 / 笔记列表 / 编辑器，侧边栏与列表都可折叠
-- **实时 Markdown 编辑**：标题按真实字号显示、语法标记保持可见可编辑，公式在编辑时就渲染成排版结果，光标移入自动还原为 TeX 源码
-- **右键插入**：正文里点右键（或点工具栏的 `+`）可以插入标题、列表、表格、代码块、公式、日期，以及会议纪要 / 日报 / 周报 / 待办清单 / 读书笔记 / 技术方案六套整篇模板。模板里的日期是实时生成的，插入后光标会停在第一个要填的位置
-- **预览模式**：`Ctrl + P` 在编辑与全渲染预览之间切换
-- **数学公式**：KaTeX 行内 `$...$` 与块级 `$$...$$`
-- **图片**：直接粘贴截图或拖入 PNG / JPEG / GIF / WebP，文件保存在笔记旁的 `assets/` 目录
-- **代码高亮**：26 种常用语言，按需加载
-- **组织方式**：文件夹、标签、收藏、最近使用、回收站
-- **搜索**：SQLite FTS5 全文检索，结果带高亮片段
-- **命令面板**：`Ctrl + Shift + P`，同时搜索命令与笔记
-- **导出**：Markdown / HTML / PDF / Word / 纯文本
-- **深色主题**：可跟随系统
-- **系统托盘**：最小化到托盘、开机自启
-- **版本更新**：可在启动时检查 GitHub Releases，也可在“关于”中手动检查；下载和安装始终由用户确认
+从 [Releases](https://github.com/7788dev/qiaoji/releases/latest) 下载 `Qiaoji-<版本>-windows-amd64-setup.exe`。发布页附带 `SHA256SUMS.txt`，可用于校验文件完整性。
+
+系统要求：Windows 10 / 11，已安装 [WebView2 运行时](https://developer.microsoft.com/microsoft-edge/webview2/)（系统通常已自带）。
+
+> 安装包尚未使用商业代码签名。SmartScreen 可能提示「Windows 已保护你的电脑」。请只从本仓库 Releases 下载，核对 SHA-256 后，在提示中选择「更多信息」→「仍要运行」。
+
+已安装的版本可在应用内 **设置 → 关于** 检查更新。下载与安装始终由你确认。
 
 ---
 
-## 数据存放在哪里
+## 特性
+
+- **本地优先** — 笔记以 Markdown 文件保存在你指定的目录，可用任意编辑器打开，也可丢进网盘或 Git。
+- **实时编辑** — 标题按真实字号显示，语法标记保持可见可改；公式在编辑时即排版，光标移入还原为 TeX。
+- **组织** — 文件夹、标签、收藏、最近使用、回收站；侧边栏与列表均可折叠。
+- **搜索** — SQLite FTS5 全文检索，结果带高亮片段；`Ctrl + Shift + P` 同时搜命令与笔记。
+- **公式与代码** — KaTeX 行内 / 块级公式；26 种语言按需高亮。
+- **图片** — 粘贴截图或拖入 PNG / JPEG / GIF / WebP，文件落在笔记旁的 `assets/`。
+- **导出** — Markdown、HTML、PDF、Word、纯文本。PDF 走应用内 WebView2 排版，与预览一致，无需安装 Edge。
+- **模板** — 右键或工具栏可插入会议纪要、日报、周报、待办、读书笔记、技术方案。
+- **体积** — 单个安装包约 19 MB，不内嵌 Chromium。
+
+---
+
+## 数据
 
 ```
-%USERPROFILE%\Documents\巧记\      笔记库（可在设置里更改）
-├─ 工作\  学习\  项目\  日常\             文件夹就是侧边栏分类
-│  └─ 周报计划.md
+%USERPROFILE%\Documents\巧记\     笔记库（可在设置中更改）
+├─ 工作\  学习\  项目\  日常\
 ├─ 欢迎使用巧记.md
 └─ .qiaoji\
-   ├─ index.db      搜索索引（可随时删除，下次启动自动重建）
-   ├─ vault.json    初始化标记
-   └─ trash\        回收站
+   ├─ index.db                   搜索索引（可删，下次启动重建）
+   ├─ vault.json                 初始化标记
+   └─ trash\                     回收站
 
-%APPDATA%\巧记\settings.json        应用设置
+%APPDATA%\巧记\settings.json     窗口、主题、导出路径等
 ```
 
-每篇笔记的元数据放在 YAML front matter 里，用别的编辑器打开也不会乱：
+每篇笔记的元数据写在 YAML front matter 中。巧记只维护 `id`、`title`、`tags`、`created`、`updated`、`favorite`；其它字段（例如 Obsidian 的 `aliases`）会原样保留。front matter 无法解析时会拒绝写入，而不是覆盖原文件。
 
-```markdown
----
-id: 01j8xq2n5m7p
-title: 欢迎使用巧记
-tags:
-  - 灵感
-created: 2026-08-11T23:47:35+08:00
-updated: 2026-08-12T00:10:00+08:00
-favorite: true
----
+删除单篇笔记会移入 `.qiaoji/trash`；删除文件夹会连同其中的图片和附件一起进入回收站。同目录 `assets/` 中被多篇笔记引用的图片不会随单篇删除自动清除。
 
-# 欢迎使用巧记
-```
-
-上面这六个字段是巧记自己写的。别的编辑器加的键（Obsidian 的 `aliases`、`cssclass`，或者你自定义的字段）会原样保留，保存时不会被吃掉；万一头部写坏了无法解析，巧记会报错并放弃写入，而不是拿一份新的覆盖过去。
-
-**关于示例笔记**：首次使用某个文件夹时会写入几篇示例笔记，同时留下 `.qiaoji/vault.json` 标记。把示例笔记全部删掉后，下次启动就是空的——不会再塞回来。想重新拿到示例笔记，删掉 `vault.json` 即可。
-
-**关于回收站**：删除单篇笔记会把它移进 `.qiaoji/trash`。删除文件夹则是把整个目录搬进去——里面的图片、PDF、附件都跟着走，还原时一起回来。
-
-**关于图片附件**：为避免误删被其他笔记复用的文件，删除单篇笔记时不会自动删除
-同目录 `assets/` 中的图片；不再使用的附件可以直接在资源管理器中清理。
+首次打开某个笔记库会写入示例笔记，并留下 `vault.json`。把示例全部删掉后不会再自动塞回；若要重新生成，删除该标记文件即可。
 
 ---
 
 ## 快捷键
 
-| 操作 | 快捷键 | | 操作 | 快捷键 |
-| --- | --- | --- | --- | --- |
-| 新建笔记 | `Ctrl + N` | | 加粗 | `Ctrl + B` |
-| 保存 | `Ctrl + S` | | 斜体 | `Ctrl + I` |
-| 导出 | `Ctrl + Shift + E` | | 行内代码 | `Ctrl + E` |
-| 关闭标签 | `Ctrl + W` | | 插入链接 | `Ctrl + K` |
-| 查找 | `Ctrl + F` | | 任务项 | `Ctrl + Shift + L` |
-| 替换 | `Ctrl + H` | | 一至四级标题 | `Ctrl + 1` ~ `4` |
-| 全文搜索 | `Ctrl + Shift + F` | | 预览切换 | `Ctrl + P` |
-| 命令面板 | `Ctrl + Shift + P` | | 侧边栏 | `Ctrl + \` |
-| 设置 | `Ctrl + ,` | | 快捷键一览 | `Ctrl + /` |
-
----
-
-## 技术选型的几个理由
-
-**为什么用 Wails v2 而不是 Electron**
-Electron 每个应用都要带一份 Chromium（约 150 MB）。Wails 用系统自带的 WebView2，可执行文件只有 18.7 MB，内存占用大约是同类 Electron 笔记应用的三分之一。
-
-**必须锁 Wails v2.13.0**
-Go 1.25 默认输出 DWARF5 调试信息，旧版 Wails 生成的 `wailsbindings.exe` 在 Windows 上会直接报「不是有效的 Win32 应用程序」。v2.13.0 通过在构建绑定工具时加 `-ldflags "-s -w"` 修掉了这个问题。
-
-**CGO_ENABLED=0**
-Wails 的 Windows 后端是纯 Go（go-webview2 走 COM），SQLite 用纯 Go 的 `modernc.org/sqlite`。产物是完全静态的可执行文件，不依赖任何 MinGW 运行时。
-
-**中文搜索为什么要两条路径**
-FTS5 的 `trigram` 分词器一次索引三个字符，查询短于三个字符时无法命中——而中文里「笔记」「工作」这类两字词恰恰是最常搜的。所以三字及以上走 FTS5 索引（5 ms），一到两字回退到 `LIKE` 扫描（2 ms）。两条路径的高亮片段都在 Go 侧统一生成，结果表现一致。
-
-**预览为什么不走后端渲染**
-Markdown 渲染放在前端。每次敲键盘都往 Go 端往返一次会明显掉帧，本地渲染 + 140 ms 防抖才能保证长文档打字不卡。
-
-**打字为什么不会重绘整个界面**
-编辑器缓冲区的变化走 `docRevision` 这个单独的订阅主题，`tabs` 只在打开、关闭、切换标签或元数据变化时才重新发布。所以敲一个字不会重建标签栏和笔记列表、不会抢走焦点，字数统计按内容缓存并防抖。自动保存完成后也只就地更新那一行，不再重查列表、不再遍历整个笔记库统计侧边栏。
-
-**PDF 为什么优先 WebView2**
-PDF 优先用应用已经依赖的 WebView2 打印生成；本机 Edge/Chrome 只是兜底。渲染预览的就是同一个引擎，公式、代码高亮、表格、中文断行的结果完全一致，不需要重新实现一套排版和字体处理，也不用往安装包里塞 Chromium。
-
-**Word 导出为什么手写 OOXML**
-现成的 Go docx 库无法设置代码块的等宽字体、中文 eastAsia 字体和列表重新编号。直接写 WordprocessingML 多花几百行，但换来真正可用的 Word 文档：标题进导航窗格、表格可编辑、代码块等宽带底纹、相邻有序列表各自从 1 开始。
-
-**HTML 导出为什么是单文件**
-导出的 HTML 内嵌了 KaTeX 样式与 20 个 woff2 字体（base64），不联网、不带附属文件也能正确显示公式。应用内则用只引用 woff2 的版本，比 KaTeX 原版少打包 40 个字体文件，约 800 KB。
+| 操作 | 快捷键 | 操作 | 快捷键 |
+| --- | --- | --- | --- |
+| 新建笔记 | `Ctrl + N` | 加粗 | `Ctrl + B` |
+| 保存 | `Ctrl + S` | 斜体 | `Ctrl + I` |
+| 导出 | `Ctrl + Shift + E` | 行内代码 | `Ctrl + E` |
+| 关闭标签 | `Ctrl + W` | 插入链接 | `Ctrl + K` |
+| 查找 / 替换 | `Ctrl + F` / `H` | 任务项 | `Ctrl + Shift + L` |
+| 全文搜索 | `Ctrl + Shift + F` | 一至四级标题 | `Ctrl + 1` … `4` |
+| 命令面板 | `Ctrl + Shift + P` | 预览 | `Ctrl + P` |
+| 设置 | `Ctrl + ,` | 侧边栏 | `Ctrl + \` |
+| 快捷键一览 | `Ctrl + /` | | |
 
 ---
 
 ## 从源码构建
 
-需要 Go 1.25+、Node 20.19+、NSIS，以及 WebView2 运行时（Windows 10/11 自带）。
+需要 Go 1.25+、Node 20.19+、[Wails v2.13.0](https://wails.io) 与 NSIS。请锁定 Wails 版本：Go 1.25 默认输出 DWARF5，旧版 Wails 在 Windows 上无法生成绑定工具。
 
 ```powershell
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
 
-# 开发模式
+# 开发
 wails dev
 
-# 生产安装包，产物在 build/bin/Qiaoji-1.0.0-windows-amd64-setup.exe
+# 安装包 → build/bin/Qiaoji-<版本>-windows-amd64-setup.exe
 $env:CGO_ENABLED = "0"
 wails build -platform windows/amd64 -nsis -installscope user -trimpath `
-  -ldflags "-s -w -X qiaoji/internal/config.AppVersion=1.0.0"
+  -ldflags "-s -w -X qiaoji/internal/config.AppVersion=1.0.1"
 ```
-
-代码检查与测试：
 
 ```powershell
 go vet ./...
@@ -191,33 +129,23 @@ npm test
 Pop-Location
 ```
 
-升级 KaTeX 或修改品牌资源后需要重新生成：
+升级 KaTeX 后执行 `go run ./tools/genkatex`。更换图标后执行 `python tools/genicon.py`（输入为 `UI/brand/icon-source.png`）。
 
-```powershell
-go run ./tools/genkatex   # 两份 KaTeX 样式表（内联版给导出，woff2 版给应用）
-python tools/genicon.py   # 应用图标、.ico、界面用的 mark 与文档用的 logo
-```
-
-`tools/genicon.py` 的输入是 `UI/brand/icon-source.png`（1024px 母版）。图标的圆角是一条超椭圆曲线（半径 15%、指数 1.75），这两个数字是量出来的而不是猜的，所以裁切正好落在画好的边缘上，既不会切进去也不会留下白边。
+Windows 后端为纯 Go（WebView2 COM + `modernc.org/sqlite`），因此发布构建使用 `CGO_ENABLED=0`。
 
 ---
 
-## 项目结构
+## 技术栈
 
-```
-main.go                  窗口、托盘、单实例锁
-app.go                   绑定给前端的 API
-internal/store/          .md 读写、front matter、回收站、示例笔记
-internal/index/          SQLite FTS5 索引与混合搜索
-internal/watch/          外部改动监听（防抖合并）
-internal/exporter/       md / txt / html / pdf / docx 导出
-internal/config/         设置持久化、开机自启
-tools/                   KaTeX 样式表与品牌资源生成器
-UI/brand/                图标母版与生成的 logo
-frontend/public/          先于打包脚本执行的主题防闪脚本
-frontend/src/
-  lib/                   DOM 辅助、编辑器、Markdown、虚拟列表、公式装饰
-  ui/                    标题栏、侧边栏、列表、编辑区、状态栏、各类对话框
-  styles/                设计令牌与样式
-  **/*.test.ts           Vitest（jsdom）：状态订阅、自动保存、菜单与弹窗生命周期
-```
+| | |
+| --- | --- |
+| 运行时 | Go 1.25、Wails v2.13、系统 WebView2 |
+| 前端 | TypeScript、CodeMirror 6、KaTeX、Vite |
+| 数据 | 本地 `.md` + YAML front matter；SQLite FTS5 仅作索引 |
+| 导出 | 自包含 HTML、WebView2 PDF、手写 OOXML（Word） |
+
+---
+
+## 许可
+
+[MIT](LICENSE)
