@@ -1,0 +1,21 @@
+/* Scale the live app window down, keeping the 1240×820 layout intact. */
+.device {
+  flex: none !important;
+  width: 1240px !important;
+  height: 820px !important;
+  min-height: 0 !important;
+  margin: auto !important;
+}
+
+.device.is-max {
+  width: auto !important;
+  height: auto !important;
+  zoom: 1 !important;
+}
+
+.device.is-min {
+  width: 220px !important;
+  height: 48px !important;
+  zoom: 1 !important;
+  margin: 0 !important;
+}
