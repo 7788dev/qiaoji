@@ -495,7 +495,7 @@ export function openSettings(deps: SettingsDeps, initial: SectionId = "general")
       el(
         "div",
         { class: "field__hint", style: { marginTop: "var(--sp-4)" } },
-        "PDF 使用系统自带的 Edge 排版引擎生成，与预览完全一致；Word 导出会保留标题层级、列表、表格与代码块样式。",
+        "PDF 用应用内排版引擎生成，与预览完全一致；Word 导出会保留标题层级、列表、表格与代码块样式。",
       ),
     );
   }

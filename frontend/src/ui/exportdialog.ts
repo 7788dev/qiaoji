@@ -16,7 +16,7 @@ interface FormatSpec {
 const FORMATS: FormatSpec[] = [
   { id: "md", label: "Markdown (.md)", hint: "原样保存源文件，适合备份与迁移" },
   { id: "html", label: "HTML (.html)", hint: "单文件自包含，公式与样式一并内嵌" },
-  { id: "pdf", label: "PDF 文档 (.pdf)", hint: "排版与预览完全一致，适合打印和分享" },
+  { id: "pdf", label: "PDF 文档 (.pdf)", hint: "用应用内排版引擎生成，与预览一致" },
   { id: "docx", label: "Word 文档 (.docx)", hint: "带标题层级与表格，可在 Word 中继续编辑" },
   { id: "txt", label: "纯文本 (.txt)", hint: "去掉所有标记，只保留文字" },
 ];

@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	fyne.io/systray v1.12.2
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/wailsapp/go-webview2 v1.0.22
 	github.com/wailsapp/wails/v2 v2.13.0
 	github.com/yuin/goldmark v1.8.5
 	golang.org/x/sys v0.47.0
@@ -38,7 +39,6 @@ require (
 	github.com/tkrajina/go-reflector v0.5.8 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
-	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/net v0.54.0 // indirect

@@ -13,16 +13,28 @@ import (
 	"time"
 )
 
-// writePDF renders through headless Edge (or Chrome) instead of a Go PDF
-// library, because the same engine already drew the preview: maths, code
-// highlighting, tables and CJK line breaking come out identical, and no font
-// or layout work has to be reimplemented.
-func writePDF(r Request, out string) error {
-	browser, err := findBrowser()
-	if err != nil {
-		return err
-	}
+// htmlToPDF, when set, is the preferred renderer. On Windows this is a hidden
+// WebView2 PrintToPdf pass, so exporting works even without Edge/Chrome.
+var htmlToPDF func(srcHTML, dstPDF string) error
 
+// findBrowserFn locates a Chromium CLI binary. Tests replace it.
+var findBrowserFn = findBrowser
+
+var errNoBrowser = errors.New("未找到 Microsoft Edge 或 Chrome")
+
+const pdfUseHTML = "请改用 HTML 导出"
+
+func pdfFailed(detail error) error {
+	if detail == nil {
+		return errors.New("无法导出 PDF。" + pdfUseHTML)
+	}
+	return fmt.Errorf("无法导出 PDF: %v。%s", detail, pdfUseHTML)
+}
+
+// writePDF renders the standalone HTML through WebView2 when possible, then
+// falls back to a headless Edge/Chrome CLI. Both paths use the same engine as
+// the preview, so maths, highlighting, tables and CJK breaking match.
+func writePDF(r Request, out string) error {
 	work, err := os.MkdirTemp("", "qiaoji-pdf-")
 	if err != nil {
 		return err
@@ -39,7 +51,32 @@ func writePDF(r Request, out string) error {
 	}
 
 	tmpPDF := filepath.Join(work, "note.pdf")
-	profile := filepath.Join(work, "profile")
+
+	var wvErr error
+	if htmlToPDF != nil {
+		wvErr = htmlToPDF(src, tmpPDF)
+		if wvErr == nil {
+			if st, err := os.Stat(tmpPDF); err == nil && st.Size() > 0 {
+				return moveFile(tmpPDF, out)
+			}
+			wvErr = errors.New("导出的 PDF 为空")
+		}
+		_ = os.Remove(tmpPDF)
+	}
+
+	return writePDFWithBrowser(src, tmpPDF, out, wvErr)
+}
+
+func writePDFWithBrowser(src, tmpPDF, out string, wvErr error) error {
+	browser, err := findBrowserFn()
+	if err != nil {
+		if wvErr != nil {
+			return pdfFailed(wvErr)
+		}
+		return pdfFailed(err)
+	}
+
+	profile := filepath.Join(filepath.Dir(tmpPDF), "profile")
 
 	// New headless is the default in current Edge, but --print-to-pdf has been
 	// more reliable under the old implementation, so that is tried second.
@@ -55,7 +92,10 @@ func writePDF(r Request, out string) error {
 		}
 		_ = os.Remove(tmpPDF)
 	}
-	return fmt.Errorf("PDF 导出失败: %w", lastErr)
+	if wvErr != nil {
+		lastErr = fmt.Errorf("%v; 浏览器: %v", wvErr, lastErr)
+	}
+	return pdfFailed(lastErr)
 }
 
 func runBrowser(browser, mode, profile, src, dst string) error {
@@ -132,15 +172,16 @@ func moveFile(src, dst string) error {
 }
 
 var (
-	browserOnce sync.Once
-	browserPath string
+	browserOnce        sync.Once
+	browserPath        string
+	browserCandidateFn = defaultBrowserCandidates
 )
 
-// findBrowser locates a Chromium binary. Edge ships with Windows, so on the
-// target platform this practically always resolves on the first candidate.
+// findBrowser locates a Chromium binary used only as a fallback when WebView2
+// printing is unavailable.
 func findBrowser() (string, error) {
 	browserOnce.Do(func() {
-		for _, c := range browserCandidates() {
+		for _, c := range browserCandidateFn() {
 			if c == "" {
 				continue
 			}
@@ -158,12 +199,17 @@ func findBrowser() (string, error) {
 		}
 	})
 	if browserPath == "" {
-		return "", errors.New("未找到 Microsoft Edge 或 Chrome，无法导出 PDF。请改用 HTML 导出，或安装 Edge 后重试")
+		return "", errNoBrowser
 	}
 	return browserPath, nil
 }
 
-func browserCandidates() []string {
+func resetBrowserLookup() {
+	browserOnce = sync.Once{}
+	browserPath = ""
+}
+
+func defaultBrowserCandidates() []string {
 	if runtime.GOOS != "windows" {
 		return []string{
 			"microsoft-edge", "google-chrome", "chromium", "chromium-browser",

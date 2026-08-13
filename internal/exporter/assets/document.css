@@ -1,5 +1,5 @@
 /* Stylesheet for exported HTML and PDF. Mirrors the in-app preview typography
-   but is written to stand alone, with print rules for the headless-Edge pass. */
+   but is written to stand alone, with print rules for the WebView2 PDF pass. */
 
 :root {
   --doc-fg: #1a1f26;
