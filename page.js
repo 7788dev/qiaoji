@@ -1,7 +1,6 @@
 (function () {
   var WIDTH = 1240;
   var HEIGHT = 820;
-  var PAD = 40;
   var NAV = 52;
 
   var device = document.getElementById("device");
@@ -18,16 +17,15 @@
   }
 
   function largeScale() {
-    var availW = window.innerWidth - PAD;
-    var heroH = hero ? hero.offsetHeight : 0;
-    var availH = window.innerHeight - NAV - heroH - 28;
-    return clamp(Math.min(availW / WIDTH, availH / HEIGHT, 1), 0.35, 1);
+    var availW = window.innerWidth - 24;
+    var availH = window.innerHeight - NAV - 16;
+    return clamp(Math.min(availW / WIDTH, availH / HEIGHT, 1), 0.55, 1);
   }
 
   function smallScale() {
-    var availW = window.innerWidth - PAD;
-    var availH = window.innerHeight * 0.34;
-    return clamp(Math.min(availW / WIDTH, availH / HEIGHT), 0.22, 0.42);
+    var availW = window.innerWidth - 24;
+    var availH = window.innerHeight * 0.48;
+    return clamp(Math.min(availW / WIDTH, availH / HEIGHT), 0.32, 0.58);
   }
 
   function progress() {
