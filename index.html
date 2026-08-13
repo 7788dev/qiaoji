@@ -19,7 +19,7 @@
     <link rel="modulepreload" crossorigin href="./assets/markdown-BN1BNkpz.js" />
     <link rel="modulepreload" crossorigin href="./assets/editor-BiDhzWF9.js" />
     <link rel="stylesheet" crossorigin href="./assets/style-DjvzYaPo.css" />
-    <link rel="stylesheet" href="./page.css?v=9" />
+    <link rel="stylesheet" href="./page.css?v=10" />
   </head>
   <body>
     <header class="site-nav">
@@ -41,15 +41,17 @@
       <p class="hero__sub">笔记就是磁盘上的 <code>.md</code> 文件：不锁定、可同步，卸载后数据仍在。</p>
     </section>
 
-    <section class="stage" aria-label="界面演示">
-      <div class="device" id="device">
-        <div class="dock-chip">
-          <img src="./mark.png" alt="" />
-          巧记
+    <div class="stage-track" id="stage-track">
+      <section class="stage" id="stage" aria-label="界面演示">
+        <div class="device" id="device">
+          <div class="dock-chip">
+            <img src="./mark.png" alt="" />
+            巧记
+          </div>
+          <div id="app"></div>
         </div>
-        <div id="app"></div>
-      </div>
-    </section>
+      </section>
+    </div>
 
     <main class="docs">
       <section class="docs__block" id="features">
@@ -163,6 +165,6 @@
       </div>
     </footer>
 
-    <script src="./page.js?v=9"></script>
+    <script src="./page.js?v=10"></script>
   </body>
 </html>

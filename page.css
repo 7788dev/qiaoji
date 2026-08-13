@@ -23,6 +23,7 @@ body {
   overflow-x: hidden !important;
   overflow-y: auto !important;
   overscroll-behavior: auto !important;
+  overflow-anchor: none !important;
 }
 
 html {
@@ -163,6 +164,11 @@ body {
   background: rgba(0, 0, 0, 0.045);
 }
 
+.stage-track {
+  height: 160vh;
+  overflow-anchor: none;
+}
+
 .stage {
   position: sticky;
   top: var(--page-nav);
@@ -170,9 +176,11 @@ body {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  height: auto;
-  padding: 4px 24px 36px;
+  height: calc(100vh - var(--page-nav));
+  padding: 8px 24px 16px;
   box-sizing: border-box;
+  overflow: hidden;
+  overflow-anchor: none;
   background: var(--page-bg);
 }
 
@@ -186,9 +194,11 @@ body {
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.06),
     0 24px 56px -28px rgba(0, 0, 0, 0.42) !important;
+  transform-origin: top center;
   user-select: none;
   cursor: default;
   overscroll-behavior: none;
+  overflow-anchor: none;
 }
 
 .device .scroll,
@@ -208,6 +218,7 @@ body {
   width: auto !important;
   height: auto !important;
   zoom: 1 !important;
+  transform: none !important;
   border-radius: 0 !important;
 }
 
@@ -215,6 +226,7 @@ body {
   width: 220px !important;
   height: 48px !important;
   zoom: 1 !important;
+  transform: none !important;
   margin: 0 !important;
 }
 
@@ -406,7 +418,7 @@ kbd {
   }
 
   .stage {
-    padding: 0 12px 28px;
+    padding: 8px 12px 12px;
   }
 
   .docs {

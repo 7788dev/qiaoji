@@ -4,9 +4,10 @@
   var NAV = 52;
 
   var device = document.getElementById("device");
-  var hero = document.querySelector(".hero");
+  var stage = document.getElementById("stage");
+  var track = document.getElementById("stage-track");
   var ticking = false;
-  var lastZoom = "";
+  var lastScale = "";
 
   function clamp(n, a, b) {
     return Math.max(a, Math.min(b, n));
@@ -17,36 +18,45 @@
   }
 
   function largeScale() {
-    var availW = window.innerWidth - 24;
-    var availH = window.innerHeight - NAV - 16;
-    return clamp(Math.min(availW / WIDTH, availH / HEIGHT, 1), 0.55, 1);
+    var availW = window.innerWidth - 48;
+    var availH = window.innerHeight - NAV - 24;
+    return clamp(Math.min(availW / WIDTH, availH / HEIGHT, 1), 0.45, 1);
   }
 
   function smallScale() {
-    var availW = window.innerWidth - 24;
-    var availH = window.innerHeight * 0.48;
-    return clamp(Math.min(availW / WIDTH, availH / HEIGHT), 0.32, 0.58);
+    var availW = window.innerWidth - 48;
+    var availH = (window.innerHeight - NAV) * 0.5;
+    return clamp(Math.min(availW / WIDTH, availH / HEIGHT), 0.28, 0.58);
+  }
+
+  function layoutTrack() {
+    if (!track || !stage) return;
+    var stageH = window.innerHeight - NAV;
+    var runway = Math.max(window.innerHeight * 0.55, 360);
+    track.style.height = stageH + runway + "px";
   }
 
   function progress() {
-    var hold = hero ? Math.max(hero.offsetHeight * 0.15, 12) : 12;
-    var range = Math.max(window.innerHeight * 0.42, 260);
-    return clamp((window.scrollY - hold) / range, 0, 1);
+    if (!track || !stage) return 0;
+    var runway = track.offsetHeight - stage.offsetHeight;
+    if (runway <= 1) return 0;
+    var into = NAV - track.getBoundingClientRect().top;
+    return clamp(into / runway, 0, 1);
   }
 
   function fit() {
     if (!device) return;
     if (device.classList.contains("is-max") || device.classList.contains("is-min")) {
-      if (lastZoom !== "") {
-        device.style.zoom = "";
-        lastZoom = "";
-      }
+      device.style.zoom = "";
+      device.style.transform = "";
+      lastScale = "";
       return;
     }
-    var next = String(largeScale() + (smallScale() - largeScale()) * ease(progress()));
-    if (next === lastZoom) return;
-    lastZoom = next;
-    device.style.zoom = next;
+    var next = (largeScale() + (smallScale() - largeScale()) * ease(progress())).toFixed(3);
+    if (next === lastScale) return;
+    lastScale = next;
+    device.style.zoom = "";
+    device.style.transform = "scale(" + next + ")";
   }
 
   function onScroll() {
@@ -58,6 +68,12 @@
     });
   }
 
+  function onResize() {
+    layoutTrack();
+    lastScale = "";
+    fit();
+  }
+
   function wheelDelta(ev) {
     var dy = ev.deltaY;
     if (ev.deltaMode === 1) dy *= 16;
@@ -66,7 +82,7 @@
   }
 
   function loadApp() {
-    if (document.querySelector('script[data-qiaoji-app]')) return;
+    if (document.querySelector("script[data-qiaoji-app]")) return;
     var script = document.createElement("script");
     script.type = "module";
     script.crossOrigin = "anonymous";
@@ -76,10 +92,11 @@
     document.body.appendChild(script);
   }
 
+  layoutTrack();
   fit();
   window.addEventListener("scroll", onScroll, { passive: true });
-  window.addEventListener("resize", fit);
-  window.addEventListener("load", fit);
+  window.addEventListener("resize", onResize);
+  window.addEventListener("load", onResize);
   window.addEventListener("load", loadApp);
   requestAnimationFrame(function () {
     requestAnimationFrame(loadApp);
@@ -92,8 +109,9 @@
       if (!device || device.classList.contains("is-max")) return;
       if (!device.contains(ev.target)) return;
       ev.preventDefault();
-      window.scrollBy(0, wheelDelta(ev));
-      fit();
+      ev.stopPropagation();
+      var root = document.scrollingElement || document.documentElement;
+      root.scrollTop += wheelDelta(ev);
     },
     { passive: false, capture: true },
   );
