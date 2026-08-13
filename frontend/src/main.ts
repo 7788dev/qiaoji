@@ -309,8 +309,8 @@ function checkUpdatesOnLaunch(): void {
       notify.info(`巧记 ${info.latestVersion} 已发布`, {
         duration: 12_000,
         action: {
-          label: "查看更新",
-          run: () => void api.openExternal(info.releaseUrl).catch((err) => reportError("打开更新页面", err)),
+          label: "更新",
+          run: () => void api.openExternal(info.releaseUrl).catch((err) => reportError("打开仓库", err)),
         },
       });
     })

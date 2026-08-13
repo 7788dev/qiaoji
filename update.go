@@ -1,10 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,14 +16,26 @@ import (
 )
 
 const (
-	latestReleaseAPI = "https://api.github.com/repos/7788dev/qiaoji/releases/latest"
-	releasesBaseURL  = "https://github.com/7788dev/qiaoji/releases/tag/"
+	repoOwner = "7788dev"
+	repoName  = "qiaoji"
+	repoURL   = "https://github.com/" + repoOwner + "/" + repoName
+	// versionRawURL is the canonical GitHub raw file. The app never hits
+	// api.github.com; it reads this file through public China-friendly proxies.
+	versionRawURL = "https://raw.githubusercontent.com/" + repoOwner + "/" + repoName + "/main/version.json"
 )
 
-var updateClient = &http.Client{Timeout: 10 * time.Second}
+var versionEndpoints = []string{
+	"https://gh-proxy.com/" + versionRawURL,
+	"https://ghfast.top/" + versionRawURL,
+	"https://gh.llkk.cc/" + versionRawURL,
+	"https://raw.gitmirror.com/" + repoOwner + "/" + repoName + "/main/version.json",
+	versionRawURL,
+}
 
-// UpdateInfo describes the latest stable GitHub release. The app deliberately
-// opens the release page instead of downloading or executing code itself.
+var updateClient = &http.Client{Timeout: 6 * time.Second}
+
+// UpdateInfo describes the latest published version. The app only compares
+// numbers and opens the repository; it never downloads or installs anything.
 type UpdateInfo struct {
 	CurrentVersion string `json:"currentVersion"`
 	LatestVersion  string `json:"latestVersion"`
@@ -31,59 +43,135 @@ type UpdateInfo struct {
 	ReleaseURL     string `json:"releaseUrl"`
 }
 
-// CheckForUpdates queries GitHub's latest stable release endpoint. Network
-// failures are returned to the caller so automatic checks can stay quiet while
-// manual checks can give the user an actionable error.
+// CheckForUpdates reads version.json via a GitHub proxy. Network failures are
+// returned so automatic checks can stay quiet while a manual check can explain.
 func (a *App) CheckForUpdates() (UpdateInfo, error) {
 	ctx := a.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return fetchLatestRelease(ctx, updateClient, latestReleaseAPI, config.AppVersion)
+	return fetchLatestVersion(ctx, updateClient, config.AppVersion, versionEndpoints...)
 }
 
-func fetchLatestRelease(
+func fetchLatestVersion(
 	ctx context.Context,
 	client *http.Client,
-	endpoint string,
 	current string,
+	endpoints ...string,
 ) (UpdateInfo, error) {
-	out := UpdateInfo{CurrentVersion: current}
+	out := UpdateInfo{
+		CurrentVersion: current,
+		ReleaseURL:     repoURL,
+	}
+	if len(endpoints) == 0 {
+		endpoints = versionEndpoints
+	}
+
+	var lastErr error
+	for _, endpoint := range endpoints {
+		tag, page, err := fetchVersionFile(ctx, client, endpoint, current)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return fillUpdateInfo(current, tag, page), nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("无法检查更新")
+	}
+	return out, lastErr
+}
+
+func fillUpdateInfo(current, tag, page string) UpdateInfo {
+	out := UpdateInfo{
+		CurrentVersion: current,
+		ReleaseURL:     repoURL,
+	}
+	latest, ok := parseReleaseVersion(tag)
+	if !ok {
+		return out
+	}
+	out.LatestVersion = strings.TrimPrefix(strings.TrimPrefix(tag, "v"), "V")
+	if allowedReleaseURL(page) {
+		out.ReleaseURL = page
+	}
+	if installed, ok := parseReleaseVersion(current); ok {
+		out.Available = compareReleaseVersion(latest, installed) > 0
+	}
+	return out
+}
+
+func fetchVersionFile(ctx context.Context, client *http.Client, endpoint, current string) (string, string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return out, err
+		return "", "", err
 	}
-	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	request.Header.Set("Accept", "application/json, text/plain;q=0.9, */*;q=0.8")
 	request.Header.Set("User-Agent", "Qiaoji/"+current)
 
 	response, err := client.Do(request)
 	if err != nil {
-		return out, fmt.Errorf("无法连接 GitHub: %w", err)
+		return "", "", errors.New("无法获取版本信息")
 	}
 	defer response.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<16))
+	if err != nil {
+		return "", "", errors.New("无法读取版本信息")
+	}
 	if response.StatusCode != http.StatusOK {
-		return out, fmt.Errorf("GitHub 返回状态 %d", response.StatusCode)
+		return "", "", versionStatusError(response.StatusCode)
 	}
 
-	var release struct {
-		TagName string `json:"tag_name"`
-	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
-	if err := decoder.Decode(&release); err != nil {
-		return out, fmt.Errorf("更新信息格式无效: %w", err)
-	}
-
-	latest, ok := parseReleaseVersion(release.TagName)
+	tag, page, ok := parseVersionPayload(body)
 	if !ok {
-		return out, errors.New("GitHub Release 标签不是有效版本号")
+		return "", "", errors.New("版本信息格式无效")
 	}
-	out.LatestVersion = strings.TrimPrefix(strings.TrimPrefix(release.TagName, "v"), "V")
-	out.ReleaseURL = releasesBaseURL + url.PathEscape(release.TagName)
-	if installed, ok := parseReleaseVersion(current); ok {
-		out.Available = compareReleaseVersion(latest, installed) > 0
+	return tag, page, nil
+}
+
+func parseVersionPayload(body []byte) (string, string, bool) {
+	trimmed := strings.TrimSpace(string(bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))))
+	if trimmed == "" {
+		return "", "", false
 	}
-	return out, nil
+
+	var file struct {
+		Version string `json:"version"`
+		URL     string `json:"url"`
+	}
+	if json.Unmarshal([]byte(trimmed), &file) == nil && strings.TrimSpace(file.Version) != "" {
+		if _, ok := parseReleaseVersion(file.Version); !ok {
+			return "", "", false
+		}
+		return strings.TrimSpace(file.Version), strings.TrimSpace(file.URL), true
+	}
+	if _, ok := parseReleaseVersion(trimmed); !ok {
+		return "", "", false
+	}
+	return trimmed, "", true
+}
+
+func allowedReleaseURL(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User != nil || u.Scheme != "https" || u.Host != "github.com" {
+		return false
+	}
+	path := strings.TrimSuffix(u.Path, "/")
+	prefix := "/" + repoOwner + "/" + repoName
+	return path == prefix || strings.HasPrefix(path+"/", prefix+"/")
+}
+
+func versionStatusError(code int) error {
+	switch code {
+	case http.StatusNotFound:
+		return errors.New("未找到版本信息")
+	default:
+		return errors.New("暂时无法获取版本信息，请稍后重试")
+	}
 }
 
 type releaseVersion struct {

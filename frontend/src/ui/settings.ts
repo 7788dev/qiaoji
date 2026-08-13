@@ -174,7 +174,7 @@ export function openSettings(deps: SettingsDeps, initial: SectionId = "general")
       toggle("关闭时最小化到托盘", "点击关闭按钮时保持后台运行", s.closeToTray, (v) =>
         update({ closeToTray: v }),
       ),
-      toggle("自动检查更新", "启动时检查 GitHub Releases，不会自动下载安装", s.autoUpdate, (v) =>
+      toggle("自动检查更新", "启动时检查仓库版本号，不会自动下载安装", s.autoUpdate, (v) =>
         update({ autoUpdate: v }),
       ),
       toggle(
@@ -663,11 +663,11 @@ export function openAbout(): void {
       hidden: true,
       onclick: () => {
         if (releaseUrl) {
-          void api.openExternal(releaseUrl).catch((err) => reportError("打开更新页面", err));
+          void api.openExternal(releaseUrl).catch((err) => reportError("打开仓库", err));
         }
       },
     },
-    "打开下载页",
+    "更新",
   );
   const checkButton = el(
     "button",
@@ -677,21 +677,25 @@ export function openAbout(): void {
       onclick: async () => {
         checkButton.disabled = true;
         checkButton.replaceChildren(el("span", { class: "spinner" }), "检查中…");
-        updateStatus.textContent = "正在连接 GitHub Releases…";
+        updateStatus.textContent = "正在检查新版本…";
         releaseButton.hidden = true;
         try {
           const info = await api.checkForUpdates();
           releaseUrl = info.releaseUrl;
           if (info.available) {
-            updateStatus.textContent = `发现新版本 ${info.latestVersion}`;
+            updateStatus.textContent = `发现新版本 ${info.latestVersion}，可前往仓库下载`;
+            releaseButton.replaceChildren("更新");
             releaseButton.hidden = false;
           } else if (info.currentVersion === "dev") {
-            updateStatus.textContent = `当前是开发版本，最新发布版为 ${info.latestVersion}`;
+            updateStatus.textContent = `当前是开发版本，仓库最新为 ${info.latestVersion}`;
           } else {
             updateStatus.textContent = `已是最新版本（${info.currentVersion}）`;
           }
         } catch (err) {
-          updateStatus.textContent = "检查失败，请稍后重试";
+          updateStatus.textContent = "无法在线检查，可手动打开仓库";
+          releaseUrl = "https://github.com/7788dev/qiaoji";
+          releaseButton.replaceChildren("打开仓库");
+          releaseButton.hidden = false;
           reportError("检查更新", err);
         } finally {
           checkButton.disabled = false;
