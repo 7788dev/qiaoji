@@ -19,15 +19,15 @@
     <link rel="modulepreload" crossorigin href="./assets/markdown-BN1BNkpz.js" />
     <link rel="modulepreload" crossorigin href="./assets/editor-BiDhzWF9.js" />
     <link rel="stylesheet" crossorigin href="./assets/style-DjvzYaPo.css" />
-    <link rel="stylesheet" href="./page.css?v=8" />
+    <link rel="stylesheet" href="./page.css?v=9" />
   </head>
   <body>
     <header class="site-nav">
       <a class="site-nav__brand" href="#">
-        <img src="./mark.png" alt="" width="28" height="28" />
+        <img src="./mark.png" alt="" width="22" height="22" />
         巧记
       </a>
-      <nav class="site-nav__links">
+      <nav class="site-nav__links" aria-label="页面">
         <a href="#features">特性</a>
         <a href="#install">安装</a>
         <a href="https://github.com/7788dev/qiaoji">GitHub</a>
@@ -36,7 +36,6 @@
     </header>
 
     <section class="hero">
-      <img class="hero__mark" src="./mark.png" alt="" width="72" height="72" />
       <h1>巧记</h1>
       <p class="hero__lead">本地优先的 Windows Markdown 笔记应用。</p>
       <p class="hero__sub">笔记就是磁盘上的 <code>.md</code> 文件：不锁定、可同步，卸载后数据仍在。</p>
@@ -108,7 +107,7 @@
           已安装的版本可在应用内 <strong>设置 → 关于</strong> 检查更新。有新版本时可直接下载安装包并覆盖安装。
         </p>
         <p>
-          <a class="site-nav__cta" href="https://github.com/7788dev/qiaoji/releases/latest">下载 Windows 版</a>
+          <a class="page-cta" href="https://github.com/7788dev/qiaoji/releases/latest">下载 Windows 版</a>
         </p>
       </section>
 
@@ -158,10 +157,12 @@
     </main>
 
     <footer class="foot">
-      <span>© 2026 巧记 · MIT</span>
-      <a href="https://github.com/7788dev/qiaoji">GitHub</a>
+      <div class="foot__row">
+        <span>© 2026 巧记 · MIT</span>
+        <a href="https://github.com/7788dev/qiaoji">GitHub</a>
+      </div>
     </footer>
 
-    <script src="./page.js?v=8"></script>
+    <script src="./page.js?v=9"></script>
   </body>
 </html>
