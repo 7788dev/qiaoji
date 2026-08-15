@@ -151,3 +151,10 @@ Windows 后端为纯 Go（WebView2 COM + `modernc.org/sqlite`），因此发布�
 ## 许可
 
 [MIT](LICENSE)
+
+---
+
+<div align="center">
+<sub>友链 · <a href="https://linux.do"><b>linux.do</b></a></sub>
+</div>
+
