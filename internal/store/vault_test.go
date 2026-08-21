@@ -385,6 +385,65 @@ func TestSlugifyHandlesUnsafeNames(t *testing.T) {
 	}
 }
 
+func TestFolderRenameReturnsNormalizedPath(t *testing.T) {
+	v := newVault(t)
+	if _, err := v.CreateFolder("项目"); err != nil {
+		t.Fatal(err)
+	}
+	child := filepath.Join(v.Root(), "项目", "子目录")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := v.RenameFolderTo("项目", `新/名称?`)
+	if err != nil {
+		t.Fatalf("RenameFolderTo: %v", err)
+	}
+	if got != "新-名称-" {
+		t.Errorf("normalized path = %q, want 新-名称-", got)
+	}
+	if _, err := os.Stat(filepath.Join(v.Root(), filepath.FromSlash(got), "子目录")); err != nil {
+		t.Fatalf("renamed folder is missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(v.Root(), "项目")); !os.IsNotExist(err) {
+		t.Errorf("old folder still exists, stat error = %v", err)
+	}
+}
+
+func TestFolderRenameRejectsInvalidPathsAndDuplicates(t *testing.T) {
+	v := newVault(t)
+	if _, err := v.CreateFolder("工作"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.CreateFolder(" 工作 "); !errors.Is(err, ErrExists) {
+		t.Fatalf("duplicate CreateFolder error = %v, want ErrExists", err)
+	}
+
+	for _, tc := range []struct {
+		rel, name string
+	}{
+		{"", "新名"},
+		{"../越界", "新名"},
+		{"工作", ""},
+		{"工作.md", "新名"},
+		{InternalDir, "新名"},
+	} {
+		if _, err := v.RenameFolderTo(tc.rel, tc.name); err == nil {
+			t.Errorf("RenameFolderTo(%q, %q) = nil, want validation error", tc.rel, tc.name)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(v.Root(), "工作.md"), []byte("# 文件\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := v.CreateFolder("目标"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.RenameFolderTo("工作", "目标"); !errors.Is(err, ErrExists) {
+		t.Fatalf("duplicate RenameFolderTo error = %v, want ErrExists", err)
+	}
+}
+
 func TestUniquePathAvoidsCollisions(t *testing.T) {
 	v := newVault(t)
 	a, _ := v.Create("", "同名", "")
@@ -749,6 +808,39 @@ func TestInitialisationMarkerIsWrittenOnce(t *testing.T) {
 	}
 	if again.IsInitialised() {
 		t.Error("deleting the marker should allow re-initialisation")
+	}
+}
+
+func TestVaultIDIsStableAndStoredOutsideMarkdown(t *testing.T) {
+	v := newVault(t)
+	if err := v.MarkInitialised(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := v.VaultID()
+	if err != nil || first == "" {
+		t.Fatalf("VaultID = %q, %v", first, err)
+	}
+	again, err := Open(v.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := again.VaultID()
+	if err != nil || second != first {
+		t.Fatalf("reopened VaultID = %q, %v; want %q", second, err, first)
+	}
+	marker, err := os.ReadFile(v.InternalPath("vault.json"))
+	if err != nil || !strings.Contains(string(marker), first) {
+		t.Fatalf("marker = %q, %v", marker, err)
+	}
+	files, err := filepath.Glob(filepath.Join(v.Root(), "*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range files {
+		data, _ := os.ReadFile(path)
+		if strings.Contains(string(data), first) {
+			t.Fatalf("vault id leaked into Markdown %s", path)
+		}
 	}
 }
 

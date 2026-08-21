@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"qiaoji/internal/store"
@@ -84,6 +85,105 @@ func TestSyncIsIncremental(t *testing.T) {
 	}
 	if changed != 1 {
 		t.Errorf("Sync after one edit touched %d notes, want 1", changed)
+	}
+}
+
+func TestSyncUsesFilesystemMtimeInsteadOfFutureFrontMatterUpdated(t *testing.T) {
+	v, ix := newFixture(t)
+	path := filepath.Join(v.Root(), "future.md")
+	future := time.Now().Add(10 * 365 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	raw := "---\nid: future-note\ntitle: Future\ncreated: 2026-01-01T00:00:00Z\nupdated: " + future + "\n---\n# Future\n\nbody\n"
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := ix.Sync(v); err != nil || changed != 1 {
+		t.Fatalf("first Sync = %d, %v; want 1", changed, err)
+	}
+	if changed, err := ix.Sync(v); err != nil || changed != 0 {
+		t.Fatalf("second Sync = %d, %v; future front matter must not force a reread", changed, err)
+	}
+}
+
+func TestSyncAcceptsExternallyRestoredOlderMtimeOnce(t *testing.T) {
+	v, ix := newFixture(t)
+	note, err := v.Create("", "Restored", "# Restored\n\nnewer body\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := ix.Sync(v); err != nil || changed != 1 {
+		t.Fatalf("seed Sync = %d, %v; want 1", changed, err)
+	}
+
+	raw, err := os.ReadFile(note.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := strings.Replace(string(raw), "newer body", "older body", 1)
+	if restored == string(raw) {
+		t.Fatal("test fixture did not contain the expected body")
+	}
+	if err := os.WriteFile(note.Path, []byte(restored), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	older := note.FileModTime.Add(-24 * time.Hour)
+	if err := os.Chtimes(note.Path, older, older); err != nil {
+		t.Fatal(err)
+	}
+	restoredInfo, err := os.Stat(note.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if changed, err := ix.Sync(v); err != nil || changed != 1 {
+		t.Fatalf("restored Sync = %d, %v; want one update", changed, err)
+	}
+	var content string
+	var indexedMtime int64
+	if err := ix.db.QueryRow(`SELECT content, mtime FROM notes WHERE path = ?`, note.Path).Scan(&content, &indexedMtime); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "older body") {
+		t.Fatalf("index kept stale content: %q", content)
+	}
+	if want := restoredInfo.ModTime().UnixMilli(); indexedMtime != want {
+		t.Fatalf("indexed mtime = %d, want restored filesystem mtime %d", indexedMtime, want)
+	}
+	if changed, err := ix.Sync(v); err != nil || changed != 0 {
+		t.Fatalf("second restored Sync = %d, %v; want no-op", changed, err)
+	}
+}
+
+func TestSchemaUpgradeRecalibratesLegacyLogicalMtimeOnce(t *testing.T) {
+	v, ix := newFixture(t)
+	path := filepath.Join(v.Root(), "legacy-future.md")
+	future := time.Now().Add(10 * 365 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	raw := "---\nid: legacy-future\ntitle: Legacy Future\ncreated: 2026-01-01T00:00:00Z\nupdated: " + future + "\n---\n# Legacy Future\n\nbody\n"
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := ix.Sync(v); err != nil || changed != 1 {
+		t.Fatalf("seed Sync = %d, %v", changed, err)
+	}
+	if _, err := ix.db.Exec(`UPDATE notes SET mtime = ?, updated = ?`, time.Now().Add(365*24*time.Hour).UnixMilli(), time.Now().Add(365*24*time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ix.db.Exec(`PRAGMA user_version = 4`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ix.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(ix.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	if changed, err := upgraded.Sync(v); err != nil || changed != 1 {
+		t.Fatalf("upgrade calibration = %d, %v; want one real reread", changed, err)
+	}
+	if changed, err := upgraded.Sync(v); err != nil || changed != 0 {
+		t.Fatalf("second calibration = %d, %v; want no-op", changed, err)
 	}
 }
 

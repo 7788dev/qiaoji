@@ -164,13 +164,8 @@
 
 .select {
   cursor: default;
-  appearance: none;
+  appearance: auto;
   padding-right: var(--sp-7);
-  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
-    linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: calc(100% - 15px) 15px, calc(100% - 11px) 15px;
-  background-size: 4px 4px, 4px 4px;
-  background-repeat: no-repeat;
   color: var(--fg);
 }
 
@@ -636,7 +631,7 @@
 .toasts {
   position: fixed;
   right: var(--sp-6);
-  bottom: calc(var(--statusbar-h) + var(--sp-5));
+  bottom: calc(var(--statusbar-h) + var(--sp-4));
   z-index: 90;
   display: flex;
   flex-direction: column-reverse;

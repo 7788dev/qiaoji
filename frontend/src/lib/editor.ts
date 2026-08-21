@@ -36,6 +36,7 @@ import {
 } from "@codemirror/commands";
 import {
   HighlightStyle,
+  LanguageDescription,
   bracketMatching,
   indentUnit,
   syntaxHighlighting,
@@ -68,6 +69,19 @@ export interface EditorSettings {
 const themeCompartment = new Compartment();
 const settingsCompartment = new Compartment();
 const readOnlyCompartment = new Compartment();
+const languageCompartment = new Compartment();
+
+function markdownSupport(): Extension[] {
+  return [
+    markdown({
+      base: markdownLanguage,
+      codeLanguages,
+      addKeymap: false,
+    }),
+    syntaxHighlighting(markdownHighlight),
+    mathDecorations,
+  ];
+}
 
 /* ---------------------------------------------------------------- theme */
 
@@ -641,6 +655,8 @@ export class MarkdownEditor {
   readonly view: EditorView;
   private readonly options: EditorOptions;
   private settings: EditorSettings;
+  private languageExtension: Extension = markdownSupport();
+  private languageGeneration = 0;
 
   constructor(options: EditorOptions, settings: EditorSettings) {
     this.options = options;
@@ -690,13 +706,7 @@ export class MarkdownEditor {
       EditorView.lineWrapping,
       EditorState.allowMultipleSelections.of(true),
       cmPlaceholder("从这里开始写…"),
-      markdown({
-        base: markdownLanguage,
-        codeLanguages,
-        addKeymap: false,
-      }),
-      syntaxHighlighting(markdownHighlight),
-      mathDecorations,
+      languageCompartment.of(this.languageExtension),
       keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
       themeCompartment.of(baseTheme),
       settingsCompartment.of(settingsExtension(this.settings)),
@@ -812,6 +822,25 @@ export class MarkdownEditor {
         readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [],
       ),
     });
+  }
+
+  async setLanguage(language: string): Promise<void> {
+    const generation = ++this.languageGeneration;
+    const name = language.trim().toLowerCase();
+    let extension: Extension = [];
+    if (name === "" || name === "text" || name === "plain") {
+      extension = [];
+    } else if (name === "markdown" || name === "md") {
+      extension = markdownSupport();
+    } else {
+      const description =
+        LanguageDescription.matchLanguageName(codeLanguages, name, false) ??
+        LanguageDescription.matchFilename(codeLanguages, `file.${name}`);
+      extension = description ? await description.load() : [];
+    }
+    if (generation !== this.languageGeneration) return;
+    this.languageExtension = extension;
+    this.view.dispatch({ effects: languageCompartment.reconfigure(extension) });
   }
 
   get doc(): string {

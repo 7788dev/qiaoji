@@ -2,6 +2,7 @@ import * as actions from "../actions";
 import * as api from "../api";
 import { el, icon } from "../lib/dom";
 import { fileSize, shortPath } from "../lib/format";
+import { frontendDiagnostics } from "../lib/perf";
 import { state, subscribe } from "../store";
 import type { EditorWidth, Settings, ThemeName } from "../types";
 import { confirm, openModal } from "./modal";
@@ -236,6 +237,13 @@ export function openSettings(deps: SettingsDeps, initial: SectionId = "general")
                 });
                 if (!ok) return;
                 try {
+                  const saved = await actions.saveAll();
+                  if (!saved) {
+                    notify.error("仍有笔记未能保存，已取消切换笔记库", {
+                      duration: 10_000,
+                    });
+                    return;
+                  }
                   const next = await api.openVault(dir);
                   await actions.adoptVault(next);
                   notify.success("已切换笔记库");
@@ -316,6 +324,12 @@ export function openSettings(deps: SettingsDeps, initial: SectionId = "general")
       ),
       toggle("括号自动匹配", "高亮成对的括号与引号", s.autoPairing, (v) =>
         update({ autoPairing: v }),
+      ),
+      toggle(
+        "实时更新预览",
+        "关闭后仅在进入预览或手动刷新时重新排版",
+        s.showLivePreview,
+        (v) => update({ showLivePreview: v }),
       ),
       selectRow(
         "缩进宽度",
@@ -528,7 +542,12 @@ export function openSettings(deps: SettingsDeps, initial: SectionId = "general")
         el(
           "div",
           { class: "setting-row__control setting-row__control--auto" },
-          el("button", { class: "btn", type: "button", onclick: deps.openAbout }, "关于"),
+          el(
+            "div",
+            { style: { display: "flex", gap: "var(--sp-2)" } },
+            el("button", { class: "btn", type: "button", onclick: openDiagnostics }, "性能诊断"),
+            el("button", { class: "btn", type: "button", onclick: deps.openAbout }, "关于"),
+          ),
         ),
       ),
     );
@@ -572,6 +591,88 @@ export function openSettings(deps: SettingsDeps, initial: SectionId = "general")
     body: el("div", { class: "settings__grid" }, nav, panel),
     onClose: unsubscribe,
   });
+}
+
+function openDiagnostics(): void {
+  const body = el(
+    "div",
+    { class: "diagnostics" },
+    el(
+      "div",
+      { class: "empty", style: { minHeight: "220px" } },
+      el("div", { class: "empty__icon" }, el("span", { class: "spinner" })),
+      el("div", { class: "empty__title" }, "正在采集本地性能数据…"),
+    ),
+  );
+
+  openModal({
+    title: "性能诊断",
+    width: 560,
+    body,
+  });
+
+  void api.diagnostics().then(
+    (data) => {
+      const frontend = frontendDiagnostics();
+      body.replaceChildren(
+        el("div", { class: "diagnostics__note" }, "仅在打开此页面时采集，不包含或上传笔记内容。"),
+        el(
+          "div",
+          { class: "stats-grid diagnostics__grid" },
+          diagnosticCard("进程树工作集", fileSize(data.workingSetBytes)),
+          diagnosticCard("Go 主进程", fileSize(data.mainProcessBytes)),
+          diagnosticCard("WebView2", fileSize(data.webViewBytes)),
+          diagnosticCard("Node", fileSize(data.nodeBytes)),
+          diagnosticCard("其他子进程", fileSize(data.otherProcessBytes)),
+          diagnosticCard("进程数", String(data.processCount)),
+          diagnosticCard("Go 堆", fileSize(data.goHeapBytes)),
+          diagnosticCard("笔记库", fileSize(data.vaultBytes)),
+          diagnosticCard("搜索索引", fileSize(data.indexBytes)),
+          diagnosticCard("笔记", String(data.notes)),
+          diagnosticCard("文件夹 / 标签", `${data.folders} / ${data.tags}`),
+        ),
+        el(
+          "div",
+          { class: "diagnostics__timings" },
+          timingRow("最近索引同步", data.lastSyncMs, `${data.lastSyncChanged} 项变更`),
+          timingRow("最近列表刷新", frontend.listRefreshMs),
+          timingRow("最近搜索", frontend.searchMs),
+          timingRow("最近预览", frontend.previewMs),
+        ),
+      );
+    },
+    (err: unknown) => {
+      body.replaceChildren(
+        el(
+          "div",
+          { class: "empty", style: { minHeight: "200px" } },
+          el("div", { class: "empty__icon" }, icon("alert", 22)),
+          el("div", { class: "empty__title" }, "无法采集性能数据"),
+          el("div", { class: "empty__hint" }, err instanceof Error ? err.message : String(err)),
+        ),
+      );
+    },
+  );
+}
+
+function diagnosticCard(label: string, value: string): HTMLElement {
+  return el(
+    "div",
+    { class: "stat-card" },
+    el("div", { class: "stat-card__value" }, value),
+    el("div", { class: "stat-card__label" }, label),
+  );
+}
+
+function timingRow(label: string, ms: number, detail = ""): HTMLElement {
+  return el(
+    "div",
+    { class: "diagnostics__row" },
+    el("span", null, label),
+    el("span", { class: "spacer" }),
+    detail ? el("span", { class: "diagnostics__detail" }, detail) : null,
+    el("strong", null, `${Math.max(0, ms).toLocaleString("zh-CN")} ms`),
+  );
 }
 
 /* ---------------------------------------------------------------- shortcuts */

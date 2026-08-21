@@ -9,8 +9,8 @@ import {
 import { fullTime, relativeTime } from "../lib/format";
 import { VirtualList } from "../lib/virtual";
 import { currentScopeLabel, state, subscribe } from "../store";
-import type { NoteMeta, SearchHit, SortBy, TrashItem } from "../types";
-import { anchorRect, showMenu } from "./menu";
+import type { NoteMeta, SearchHit, TrashItem } from "../types";
+import { showMenu } from "./menu";
 import { confirm, prompt } from "./modal";
 
 // Rows are a fixed height so the list can be virtualised. The values below are
@@ -25,12 +25,6 @@ const CARD_GAP = 10;
 // Grid view spans the whole content area, so cards can be wide enough to show
 // a couple of readable lines rather than a sliver of text.
 const CARD_MIN_WIDTH = 224;
-
-const SORT_LABELS: Record<SortBy, string> = {
-  updated: "修改时间",
-  created: "创建时间",
-  title: "标题",
-};
 
 /** A search hit and a note share just enough shape for one row renderer. */
 interface Row {
@@ -75,39 +69,20 @@ export function createNoteList(): DisposableHTMLElement {
   const title = el("span", { class: "notelist__title" });
   const count = el("span", { class: "notelist__count" });
 
-  const sortButton = el("button", {
-    class: "ibtn ibtn--sm",
-    type: "button",
-    title: "排序方式",
-    "aria-label": "排序方式",
-  });
-  sortButton.appendChild(icon("sort", 14));
-  sortButton.addEventListener("click", () => {
-    const rect = anchorRect(sortButton);
-    showMenu(
-      (Object.keys(SORT_LABELS) as SortBy[]).map((key) => ({
-        label: SORT_LABELS[key],
-        icon: state.sortBy === key ? "check" : undefined,
-        run: () => actions.setSortBy(key),
-      })),
-      { x: rect.left, y: rect.bottom + 4 },
-    );
-  });
-
-  const viewButton = el("button", {
-    class: "ibtn ibtn--sm",
-    type: "button",
-    title: "切换视图",
-    "aria-label": "切换列表或网格视图",
-    onclick: () => actions.setListView(state.listView === "list" ? "grid" : "list"),
-  });
-
   // The rows carry role="option", which is only meaningful inside a listbox.
   const scroller = el("div", {
     class: "notelist__scroll scroll",
     role: "listbox",
     "aria-label": "笔记",
   });
+
+	const retry = el("button", {
+		class: "btn btn--small",
+		type: "button",
+		hidden: true,
+		onclick: () => actions.retryListLoad(),
+	}, "重试");
+	const more = el("div", { class: "notelist__more", hidden: true }, retry);
 
   const root = el(
     "section",
@@ -117,11 +92,9 @@ export function createNoteList(): DisposableHTMLElement {
       { class: "notelist__head" },
       title,
       count,
-      el("div", { class: "spacer" }),
-      sortButton,
-      viewButton,
     ),
-    scroller,
+	    scroller,
+	    more,
   );
 
   /* ------------------------------------------------------------ rows */
@@ -217,37 +190,42 @@ export function createNoteList(): DisposableHTMLElement {
     await actions.openNote(path);
   }
 
-  function bindRow(node: HTMLElement, row: Row, index: number): void {
-    node.dataset.path = row.path;
-    node.dataset.index = String(index);
+  const rowBindings = new WeakMap<HTMLElement, { row: Row; index: number }>();
+
+  function bindRow(node: HTMLElement): void {
     node.tabIndex = 0;
     node.draggable = true;
 
-    node.addEventListener("click", () => void openFromList(row.path));
+    node.addEventListener("click", () => {
+      const current = rowBindings.get(node);
+      if (current) void openFromList(current.row.path);
+    });
     node.addEventListener("keydown", (ev) => {
+      const current = rowBindings.get(node);
+      if (!current) return;
       switch (ev.key) {
         case "Enter":
         case " ":
           ev.preventDefault();
-          void openFromList(row.path);
+          void openFromList(current.row.path);
           break;
         case "ArrowDown":
           ev.preventDefault();
-          focusRow(index + (state.listView === "grid" ? gridColumns : 1));
+          focusRow(current.index + (state.listView === "grid" ? gridColumns : 1));
           break;
         case "ArrowUp":
           ev.preventDefault();
-          focusRow(index - (state.listView === "grid" ? gridColumns : 1));
+          focusRow(current.index - (state.listView === "grid" ? gridColumns : 1));
           break;
         case "ArrowRight":
           if (state.listView !== "grid") return;
           ev.preventDefault();
-          focusRow(index + 1);
+          focusRow(current.index + 1);
           break;
         case "ArrowLeft":
           if (state.listView !== "grid") return;
           ev.preventDefault();
-          focusRow(index - 1);
+          focusRow(current.index - 1);
           break;
         case "Home":
           ev.preventDefault();
@@ -259,7 +237,7 @@ export function createNoteList(): DisposableHTMLElement {
           break;
         case "Delete":
           ev.preventDefault();
-          void actions.deleteNote(row.path);
+          void actions.deleteNote(current.row.path);
           break;
         default:
           break;
@@ -267,10 +245,13 @@ export function createNoteList(): DisposableHTMLElement {
     });
     node.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
-      openContextMenu(row, ev.clientX, ev.clientY);
+      const current = rowBindings.get(node);
+      if (current) openContextMenu(current.row, ev.clientX, ev.clientY);
     });
     node.addEventListener("dragstart", (ev) => {
-      ev.dataTransfer?.setData(DRAG_TYPE, row.path);
+      const current = rowBindings.get(node);
+      if (!current) return;
+      ev.dataTransfer?.setData(DRAG_TYPE, current.row.path);
       if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "move";
       node.classList.add("is-dragging");
     });
@@ -291,77 +272,77 @@ export function createNoteList(): DisposableHTMLElement {
       : state.notes.map(rowFromMeta);
   }
 
-  function renderRow(row: Row, index: number): HTMLElement {
-    const active = state.tabs.some((t) => t.path === row.path && t.id === state.activeTabId);
-
-    const titleNode = el("div", { class: "note-row__title" });
-    if (row.titleHtml) titleNode.innerHTML = row.titleHtml;
-    else titleNode.textContent = row.title || "未命名笔记";
-
-    const excerptNode = el("div", { class: "note-row__excerpt" });
-    if (row.excerptHtml) excerptNode.innerHTML = row.excerptHtml;
-    else excerptNode.textContent = row.excerpt || "空白笔记";
-
-    const tooltip = [row.title, row.folder && `位于 ${row.folder}`, fullTime(row.updated)]
-      .filter(Boolean)
-      .join("\n");
-
+  function renderRow(): HTMLElement {
     const node = el(
       "div",
       {
-        class: `note-row${active ? " is-active" : ""}`,
+        class: "note-row",
         role: "option",
-        "aria-selected": active ? "true" : "false",
-        title: tooltip,
       },
       el(
         "div",
         { class: "note-row__top" },
-        row.favorite
-          ? el("span", { class: "note-row__star", title: "已收藏" }, icon("star", 11))
-          : null,
-        titleNode,
-        row.folder && showsFolder()
-          ? el("span", { class: "note-row__folder" }, row.folder)
-          : null,
-        el("span", { class: "note-row__time" }, relativeTime(row.updated)),
+        el("span", { class: "note-row__star", title: "已收藏", hidden: true }, icon("star", 11)),
+        el("div", { class: "note-row__title" }),
+        el("span", { class: "note-row__folder", hidden: true }),
+        el("span", { class: "note-row__time" }),
       ),
-      excerptNode,
+      el("div", { class: "note-row__excerpt" }),
     );
-    bindRow(node, row, index);
+    bindRow(node);
     return node;
   }
 
-  function renderCard(row: Row, index: number): HTMLElement {
-    const active = state.tabs.some((t) => t.path === row.path && t.id === state.activeTabId);
-
-    const titleNode = el("div", { class: "note-card__title" });
-    if (row.titleHtml) titleNode.innerHTML = row.titleHtml;
-    else titleNode.textContent = row.title || "未命名笔记";
-
-    const excerptNode = el("div", { class: "note-card__excerpt" });
-    if (row.excerptHtml) excerptNode.innerHTML = row.excerptHtml;
-    else excerptNode.textContent = row.excerpt || "空白笔记";
-
+  function renderCard(): HTMLElement {
     const node = el(
       "div",
       {
-        class: `note-card${active ? " is-active" : ""}`,
+        class: "note-card",
         role: "option",
-        "aria-selected": active ? "true" : "false",
-        title: `${row.title}\n${fullTime(row.updated)}`,
       },
-      titleNode,
-      excerptNode,
+      el("div", { class: "note-card__title" }),
+      el("div", { class: "note-card__excerpt" }),
       el(
         "div",
         { class: "note-card__foot" },
-        row.favorite ? el("span", { class: "note-row__star" }, icon("star", 11)) : null,
-        el("span", null, relativeTime(row.updated)),
+        el("span", { class: "note-row__star", hidden: true }, icon("star", 11)),
+        el("span", { class: "note-card__time" }),
       ),
     );
-    bindRow(node, row, index);
+    bindRow(node);
     return node;
+  }
+
+  function setHighlightedText(node: HTMLElement, html: string | undefined, text: string): void {
+    if (html) node.innerHTML = html;
+    else node.textContent = text;
+  }
+
+  function updateRowNode(node: HTMLElement, row: Row, index: number): void {
+    rowBindings.set(node, { row, index });
+    node.dataset.path = row.path;
+    node.dataset.index = String(index);
+    const active = state.tabs.some((tab) => tab.path === row.path && tab.id === state.activeTabId);
+    node.classList.toggle("is-active", active);
+    node.setAttribute("aria-selected", active ? "true" : "false");
+
+    const titleNode = node.querySelector<HTMLElement>(".note-row__title, .note-card__title");
+    const excerptNode = node.querySelector<HTMLElement>(".note-row__excerpt, .note-card__excerpt");
+    if (titleNode) setHighlightedText(titleNode, row.titleHtml, row.title || "未命名笔记");
+    if (excerptNode) setHighlightedText(excerptNode, row.excerptHtml, row.excerpt || "空白笔记");
+
+    const star = node.querySelector<HTMLElement>(".note-row__star");
+    if (star) star.hidden = !row.favorite;
+    const folder = node.querySelector<HTMLElement>(".note-row__folder");
+    if (folder) {
+      folder.textContent = row.folder;
+      folder.hidden = !row.folder || !showsFolder();
+    }
+    const time = node.querySelector<HTMLElement>(".note-row__time, .note-card__time");
+    if (time) time.textContent = relativeTime(row.updated);
+    node.title = [row.title, row.folder && `位于 ${row.folder}`, fullTime(row.updated)]
+      .filter(Boolean)
+      .join("\n");
   }
 
   let gridColumns = 1;
@@ -370,13 +351,42 @@ export function createNoteList(): DisposableHTMLElement {
     scroller,
     rowHeight: ROW_HEIGHT,
     key: (row) => row.id,
-    render: (row, index) =>
-      state.listView === "grid" ? renderCard(row, index) : renderRow(row, index),
+    render: () => (state.listView === "grid" ? renderCard() : renderRow()),
+    update: updateRowNode,
   });
 
   /* ------------------------------------------------------------ empty states */
 
   function emptyState(): HTMLElement | null {
+		if (!state.indexState.ready || state.indexState.phase === "building") {
+			const progress = state.indexState.total > 0
+				? `已处理 ${state.indexState.processed} / ${state.indexState.total}`
+				: "正在扫描 Markdown 文件";
+			return el(
+				"div",
+				{ class: "empty" },
+				el("div", { class: "empty__icon" }, el("span", { class: "spinner" })),
+				el("div", { class: "empty__title" }, "正在建立笔记索引…"),
+				el("div", { class: "empty__hint" }, progress),
+			);
+		}
+		if (state.indexState.phase === "error") {
+			return el(
+				"div",
+				{ class: "empty empty--error" },
+				el("div", { class: "empty__title" }, "索引同步失败"),
+				el("div", { class: "empty__hint" }, state.indexState.error || "可以在设置中重建索引。"),
+			);
+		}
+		if (state.listError && state.notes.length === 0) {
+			return el(
+				"div",
+				{ class: "empty empty--error" },
+				el("div", { class: "empty__title" }, "读取笔记失败"),
+				el("div", { class: "empty__hint" }, state.listError),
+				el("button", { class: "btn btn--primary", type: "button", onclick: () => actions.retryListLoad() }, "重试"),
+			);
+		}
     // A first load or a scope switch on a slow drive used to show nothing at
     // all: no rows, no message, just an empty column.
     if (state.loadingList && state.notes.length === 0 && state.searchHits === null) {
@@ -425,6 +435,8 @@ export function createNoteList(): DisposableHTMLElement {
   /* ------------------------------------------------------------ painting */
 
   let emptyNode: HTMLElement | null = null;
+  let renderedView = state.listView;
+	let renderedQuery = "";
 
   function columnsForWidth(): number {
     if (state.listView !== "grid") return 1;
@@ -434,11 +446,8 @@ export function createNoteList(): DisposableHTMLElement {
 
   function paintHeader(): void {
     title.textContent = state.searchHits !== null ? "搜索结果" : currentScopeLabel();
-    const total = state.searchHits !== null ? state.searchHits.length : state.notes.length;
+		const total = state.searchHits !== null ? state.searchHits.length : state.noteTotal;
     count.textContent = total > 0 ? String(total) : "";
-    viewButton.replaceChildren(icon(state.listView === "grid" ? "list" : "grid", 14));
-    viewButton.title = state.listView === "grid" ? "切换为列表视图" : "切换为网格视图";
-    sortButton.disabled = state.searchHits !== null;
   }
 
   function paintRows(preserveScroll: boolean): void {
@@ -450,6 +459,7 @@ export function createNoteList(): DisposableHTMLElement {
     emptyNode = emptyState();
     if (emptyNode) {
       scroller.replaceChildren(emptyNode);
+			more.hidden = true;
       return;
     }
 
@@ -462,8 +472,31 @@ export function createNoteList(): DisposableHTMLElement {
       list.setColumns(1);
       list.setRowHeight(ROW_HEIGHT, 0);
     }
-    list.setItems(rows, { preserveScroll });
+		const queryKey = state.searchHits !== null
+			? `search:${state.searchQuery}`
+			: `${state.scope}:${state.scopeValue}:${state.sortBy}`;
+		const reset = renderedView !== state.listView || renderedQuery !== queryKey;
+    renderedView = state.listView;
+		renderedQuery = queryKey;
+		list.setItems(rows, { preserveScroll: preserveScroll && !reset, reset });
     paintActiveRow();
+		more.hidden = state.searchHits !== null || state.scope === "trash" || (!state.nextCursor && !state.loadingMore && !state.listError);
+		retry.hidden = !state.listError || state.notes.length === 0;
+		if (state.loadingMore) {
+			retry.hidden = true;
+			more.hidden = false;
+			more.replaceChildren(el("span", { class: "spinner" }), el("span", null, "正在加载更多…"));
+		}
+		if (!more.hidden && !state.loadingMore && !state.listError && state.nextCursor) {
+			if (!more.contains(retry)) more.replaceChildren(retry);
+			retry.textContent = "加载下一页";
+			retry.hidden = false;
+		}
+		if (!more.hidden && state.listError && state.notes.length > 0) {
+			if (!more.contains(retry)) more.replaceChildren(retry);
+			retry.textContent = "加载失败，重试";
+			retry.hidden = false;
+		}
   }
 
   /**
@@ -484,9 +517,9 @@ export function createNoteList(): DisposableHTMLElement {
     });
   }
 
-  const unsubscribeRows = subscribe(["notes", "searchHits", "listView", "loadingList"], () => {
+  const unsubscribeRows = subscribe(["notes", "searchHits", "listView", "loadingList", "loadingMore", "nextCursor", "listError", "indexState"], () => {
     paintHeader();
-    paintRows(false);
+		paintRows(true);
   });
   const unsubscribeHeader = subscribe(["scope", "scopeValue", "sortBy"], paintHeader);
   const unsubscribeActive = subscribe(["activeTabId", "tabs"], paintActiveRow);
@@ -507,11 +540,19 @@ export function createNoteList(): DisposableHTMLElement {
   paintHeader();
   paintRows(false);
 
+	const onScroll = () => {
+		if (scroller.scrollHeight - (scroller.scrollTop + scroller.clientHeight) < ROW_HEIGHT * 3) {
+			void actions.loadNextPage();
+		}
+	};
+	scroller.addEventListener("scroll", onScroll, { passive: true });
+
   return disposableElement(root, () => {
     unsubscribeRows();
     unsubscribeHeader();
     unsubscribeActive();
     columnObserver.disconnect();
+		scroller.removeEventListener("scroll", onScroll);
     list.destroy();
   });
 }

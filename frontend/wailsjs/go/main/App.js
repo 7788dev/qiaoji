@@ -46,6 +46,10 @@ export function DeleteTag(arg1) {
   return window['go']['main']['App']['DeleteTag'](arg1);
 }
 
+export function Diagnostics() {
+  return window['go']['main']['App']['Diagnostics']();
+}
+
 export function DuplicateNote(arg1) {
   return window['go']['main']['App']['DuplicateNote'](arg1);
 }
@@ -66,12 +70,20 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
+export function IndexState() {
+  return window['go']['main']['App']['IndexState']();
+}
+
 export function ListFolders() {
   return window['go']['main']['App']['ListFolders']();
 }
 
 export function ListNotes(arg1) {
   return window['go']['main']['App']['ListNotes'](arg1);
+}
+
+export function ListNotesPage(arg1) {
+  return window['go']['main']['App']['ListNotesPage'](arg1);
 }
 
 export function ListTags() {

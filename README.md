@@ -1,91 +1,135 @@
-<p align="center">
-  <img src="frontend/src/assets/mark.png" width="72" alt="巧记">
-</p>
-
-<h1 align="center">巧记</h1>
+# 巧记
 
 <p align="center">
-  本地优先的 Windows Markdown 笔记应用。<br>
-  笔记就是磁盘上的 <code>.md</code> 文件：不锁定、可同步，卸载后数据仍在。
+  <img src="frontend/src/assets/mark.png" width="72" alt="巧记 logo">
 </p>
 
 <p align="center">
-  <a href="https://github.com/7788dev/qiaoji/releases/latest"><img src="https://img.shields.io/github/v/release/7788dev/qiaoji?style=flat-square" alt="Release"></a>
-  <a href="https://github.com/7788dev/qiaoji/releases/latest"><img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Windows"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/7788dev/qiaoji?style=flat-square" alt="License"></a>
-  <a href="https://github.com/7788dev/qiaoji/releases"><img src="https://img.shields.io/github/downloads/7788dev/qiaoji/total?style=flat-square" alt="Downloads"></a>
+  A focused, local-first Markdown notebook for Windows.<br>
+  Your notes stay as portable <code>.md</code> files on disk.
+</p>
+
+<p align="center">
+  <a href="https://github.com/7788dev/qiaoji/releases"><img src="https://img.shields.io/github/v/release/7788dev/qiaoji?style=flat-square" alt="Latest release"></a>
+  <a href="https://github.com/7788dev/qiaoji/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/7788dev/qiaoji/release.yml?style=flat-square&label=build" alt="Build status"></a>
+  <a href="https://github.com/7788dev/qiaoji/blob/main/LICENSE"><img src="https://img.shields.io/github/license/7788dev/qiaoji?style=flat-square" alt="License"></a>
 </p>
 
 <p align="center">
   <a href="#安装">安装</a> ·
-  <a href="#特性">特性</a> ·
-  <a href="#数据">数据</a> ·
-  <a href="#快捷键">快捷键</a> ·
-  <a href="#从源码构建">构建</a>
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#功能">功能</a> ·
+  <a href="#数据与安全">数据与安全</a> ·
+  <a href="#从源码构建">开发</a> ·
+  <a href="#参与贡献">贡献</a>
 </p>
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="UI/screenshots/main-dark.png">
-    <img src="UI/screenshots/main-light.png" alt="巧记主界面" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="UI/screenshots/readme-dark.png">
+    <img src="UI/screenshots/readme-light.png" alt="巧记浅色主题主界面" width="100%">
   </picture>
 </p>
 
+<p align="center"><sub>真实运行界面 · 1440 × 960 · Windows WebView2</sub></p>
+
 <p align="center">
-  <img src="UI/screenshots/preview.png" width="32%" alt="预览">
-  <img src="UI/screenshots/export.png" width="32%" alt="导出">
-  <img src="UI/screenshots/settings.png" width="32%" alt="设置">
+  <img src="UI/screenshots/readme-preview.png" alt="Markdown 预览与数学公式" width="49%">
+  <img src="UI/screenshots/readme-compact.png" alt="紧凑窗口布局" width="49%">
 </p>
 
----
+<p align="center">
+  <img src="UI/screenshots/readme-command-palette.png" alt="命令面板" width="49%">
+  <img src="UI/screenshots/readme-export.png" alt="多格式导出" width="49%">
+</p>
+
+## 项目定位
+
+巧记是一款 Windows-first 的本地 Markdown 笔记应用，面向需要快速记录、整理和长期保有数据的个人用户。
+它把笔记保存为普通文件，把搜索和统计作为可重建的本地索引，因此不依赖云端账户，也不会把内容锁在专有数据库里。
 
 ## 安装
 
-从 [Releases](https://github.com/7788dev/qiaoji/releases/latest) 下载 `Qiaoji-<版本>-windows-amd64-setup.exe`。发布页附带 `SHA256SUMS.txt`，可用于校验文件完整性。
+### Windows 安装包
 
-系统要求：Windows 10 / 11，已安装 [WebView2 运行时](https://developer.microsoft.com/microsoft-edge/webview2/)（系统通常已自带）。
+1. 从 [Releases](https://github.com/7788dev/qiaoji/releases) 下载最新的 `Qiaoji-<version>-windows-amd64-setup.exe`。
+2. 下载同一版本的 `SHA256SUMS.txt`，按下面的命令校验安装包。
+3. 运行安装程序。安装范围默认为当前用户，不需要管理员权限。
 
-> 安装包尚未使用商业代码签名。SmartScreen 可能提示「Windows 已保护你的电脑」。请只从本仓库 Releases 下载，核对 SHA-256 后，在提示中选择「更多信息」→「仍要运行」。
-
-已安装的版本可在应用内 **设置 → 关于** 检查更新。版本号走国内 CDN 读取仓库中的 `version.json`；有新版本时可直接下载安装包并覆盖安装。
-
----
-
-## 特性
-
-- **本地优先** — 笔记以 Markdown 文件保存在你指定的目录，可用任意编辑器打开，也可丢进网盘或 Git。
-- **实时编辑** — 标题按真实字号显示，语法标记保持可见可改；公式在编辑时即排版，光标移入还原为 TeX。
-- **组织** — 文件夹、标签、收藏、最近使用、回收站；侧边栏与列表均可折叠。
-- **搜索** — SQLite FTS5 全文检索，结果带高亮片段；`Ctrl + Shift + P` 同时搜命令与笔记。
-- **公式与代码** — KaTeX 行内 / 块级公式；26 种语言按需高亮。
-- **图片** — 粘贴截图或拖入 PNG / JPEG / GIF / WebP，文件落在笔记旁的 `assets/`。
-- **导出** — Markdown、HTML、PDF、Word、纯文本。PDF 走应用内 WebView2 排版，与预览一致，无需安装 Edge。
-- **模板** — 右键或工具栏可插入会议纪要、日报、周报、待办、读书笔记、技术方案。
-- **体积** — 单个安装包约 19 MB，不内嵌 Chromium。
-
----
-
-## 数据
-
+```powershell
+Get-FileHash .\Qiaoji-<version>-windows-amd64-setup.exe -Algorithm SHA256
+Get-Content .\SHA256SUMS.txt
 ```
-%USERPROFILE%\Documents\巧记\     笔记库（可在设置中更改）
-├─ 工作\  学习\  项目\  日常\
-├─ 欢迎使用巧记.md
+
+系统要求：
+
+| 项目 | 要求 |
+| --- | --- |
+| 操作系统 | Windows 10 或 Windows 11，64 位 |
+| WebView | [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
+| 安装权限 | 用户级安装不需要管理员权限 |
+
+> 安装包目前未使用商业代码签名。请只从本仓库 Releases 下载，并在运行前核对 SHA-256。
+
+## 快速开始
+
+1. 启动巧记，在首次欢迎页确认或更改笔记库目录。
+2. 按 `Ctrl + N` 创建笔记，输入 Markdown 内容。
+3. 使用侧栏的文件夹、标签、收藏和最近使用组织内容。
+4. 按 `Ctrl + Shift + F` 搜索整个笔记库。
+5. 使用 `Ctrl + Shift + E` 将当前笔记导出为所需格式。
+
+笔记库可以随时用资源管理器、Git 或其他编辑器打开；巧记不会阻止外部工具访问这些 `.md` 文件。
+
+## 功能
+
+### 编辑与预览
+
+- CodeMirror 6 编辑器，支持 Markdown、代码块、任务清单、表格和快捷键。
+- 编辑与渲染预览可一键切换，支持实时预览或手动刷新。
+- KaTeX 渲染行内与块级数学公式。
+- 代码高亮按语言按需加载，减少首屏负担。
+
+### 组织与搜索
+
+- 文件夹、标签、收藏、最近使用和回收站。
+- SQLite FTS5 全文搜索，结果带上下文片段和高亮。
+- 列表和网格视图、标题/创建时间/更新时间排序。
+- 命令面板统一访问笔记操作、视图切换和设置。
+
+### 文件与导出
+
+- 粘贴或拖入 PNG、JPEG、GIF、WebP 图片，附件保存到笔记旁的 `assets/`。
+- 导出 Markdown、HTML、PDF、Word 和纯文本。
+- HTML/PDF 使用当前预览内容，PDF 通过应用内 WebView2 排版。
+- 删除操作进入可恢复回收站，支持撤销；删除文件夹会同时保留其中附件。
+
+### 可靠性与体验
+
+- 自动保存带串行写入队列，不会让并发保存覆盖较新的编辑。
+- 检测外部修改并进入冲突流程，避免静默覆盖磁盘版本。
+- 文件夹重命名会保持当前筛选路径，非法或空名称会被拦截。
+- 搜索索引、统计和诊断数据均为本地可重建缓存，不上传笔记内容。
+
+## 数据与安全
+
+巧记不要求登录，也不把笔记正文发送到网络服务。默认目录结构如下：
+
+```text
+%USERPROFILE%\Documents\巧记\       笔记库，可在设置中更改
+├─ *.md                              Markdown 笔记
+├─ <folder>\                         用户文件夹
+├─ <note-folder>\assets\             笔记附件
 └─ .qiaoji\
-   ├─ index.db                   搜索索引（可删，下次启动重建）
-   ├─ vault.json                 初始化标记
-   └─ trash\                     回收站
+   ├─ trash\                         可恢复回收站
+   ├─ vault.json                     笔记库初始化标记
+   └─ ...                             应用内部临时数据
 
-%APPDATA%\巧记\settings.json     窗口、主题、导出路径等
+%APPDATA%\巧记\settings.json         窗口、主题和导出设置
 ```
 
-每篇笔记的元数据写在 YAML front matter 中。巧记只维护 `id`、`title`、`tags`、`created`、`updated`、`favorite`；其它字段（例如 Obsidian 的 `aliases`）会原样保留。front matter 无法解析时会拒绝写入，而不是覆盖原文件。
-
-删除单篇笔记会移入 `.qiaoji/trash`；删除文件夹会连同其中的图片和附件一起进入回收站。同目录 `assets/` 中被多篇笔记引用的图片不会随单篇删除自动清除。
-
-首次打开某个笔记库会写入示例笔记，并留下 `vault.json`。把示例全部删掉后不会再自动塞回；若要重新生成，删除该标记文件即可。
-
----
+每篇笔记使用 YAML front matter 保存 `id`、`title`、`tags`、`created`、`updated` 和 `favorite` 等元数据。
+无法解析的 front matter 会拒绝写入，以保护原文件。搜索索引只服务于本地检索，删除后会自动重建。
 
 ## 快捷键
 
@@ -94,67 +138,98 @@
 | 新建笔记 | `Ctrl + N` | 加粗 | `Ctrl + B` |
 | 保存 | `Ctrl + S` | 斜体 | `Ctrl + I` |
 | 导出 | `Ctrl + Shift + E` | 行内代码 | `Ctrl + E` |
-| 关闭标签 | `Ctrl + W` | 插入链接 | `Ctrl + K` |
-| 查找 / 替换 | `Ctrl + F` / `H` | 任务项 | `Ctrl + Shift + L` |
-| 全文搜索 | `Ctrl + Shift + F` | 一至四级标题 | `Ctrl + 1` … `4` |
-| 命令面板 | `Ctrl + Shift + P` | 预览 | `Ctrl + P` |
+| 关闭当前标签 | `Ctrl + W` | 插入链接 | `Ctrl + K` |
+| 查找 / 替换 | `Ctrl + F` / `Ctrl + H` | 任务项 | `Ctrl + Shift + L` |
+| 全文搜索 | `Ctrl + Shift + F` | 标题一至四级 | `Ctrl + 1` … `Ctrl + 4` |
+| 命令面板 | `Ctrl + Shift + P` | 预览切换 | `Ctrl + P` |
 | 设置 | `Ctrl + ,` | 侧边栏 | `Ctrl + \` |
 | 快捷键一览 | `Ctrl + /` | | |
 
----
-
 ## 从源码构建
 
-需要 Go 1.25+、Node 20.19+、[Wails v2.13.0](https://wails.io) 与 NSIS。请锁定 Wails 版本：Go 1.25 默认输出 DWARF5，旧版 Wails 在 Windows 上无法生成绑定工具。
+### 环境要求
+
+- Go 1.25+
+- Node.js 20.19+
+- Wails v2.13.0
+- Windows WebView2 Runtime
+- NSIS（仅构建安装包时需要）
+
+### 安装依赖
 
 ```powershell
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
-
-# 开发
-wails dev
-
-# 安装包 → build/bin/Qiaoji-<版本>-windows-amd64-setup.exe
-$env:CGO_ENABLED = "0"
-wails build -platform windows/amd64 -nsis -installscope user -trimpath `
-  -ldflags "-s -w -X qiaoji/internal/config.AppVersion=1.0.1"
+Push-Location frontend
+npm ci
+Pop-Location
 ```
+
+### 本地开发
+
+```powershell
+wails dev
+```
+
+### 质量检查
 
 ```powershell
 go vet ./...
 go test ./...
 Push-Location frontend
-npm ci
 npx tsc --noEmit
 npm test
+npm run build
 Pop-Location
 ```
 
-发新版时先把 `version.json` 里的 `version`、`installer` 和 `sha256` 改成与新安装包一致，再打 `vX.Y.Z` 标签。应用内检查更新会通过国内 CDN 读取该文件。
+### 构建 Windows 安装包
 
-升级 KaTeX 后执行 `go run ./tools/genkatex`。更换图标后执行 `python tools/genicon.py`（输入为 `UI/brand/icon-source.png`）。
+```powershell
+$env:CGO_ENABLED = "0"
+wails build -platform windows/amd64 -nsis -installscope user -trimpath `
+  -ldflags "-s -w -X qiaoji/internal/config.AppVersion=1.1.0"
+```
 
-Windows 后端为纯 Go（WebView2 COM + `modernc.org/sqlite`），因此发布构建使用 `CGO_ENABLED=0`。
+输出位于 `build/bin/`。发布工作流会从 `vX.Y.Z` 标签读取版本、执行质量检查、生成安装包和 SHA-256 校验文件，并发布 GitHub Release。
 
----
+## 项目结构
 
-## 技术栈
+```text
+.
+├─ app.go, main.go, tray.go       Wails 应用壳与 Go 绑定
+├─ internal/store/                Markdown vault、front matter、回收站
+├─ internal/index/                SQLite FTS5 搜索索引与分页查询
+├─ internal/exporter/             Markdown / HTML / PDF / DOCX / TXT 导出
+├─ internal/watch/                文件变更监听与增量同步
+├─ frontend/src/                  TypeScript UI、编辑器和交互逻辑
+├─ frontend/wailsjs/              提交到仓库的生成绑定
+├─ UI/screenshots/                README 与 UI 验收截图
+└─ build/windows/                 Windows 图标、manifest 和 NSIS 配置
+```
 
-| | |
-| --- | --- |
-| 运行时 | Go 1.25、Wails v2.13、系统 WebView2 |
-| 前端 | TypeScript、CodeMirror 6、KaTeX、Vite |
-| 数据 | 本地 `.md` + YAML front matter；SQLite FTS5 仅作索引 |
-| 导出 | 自包含 HTML、WebView2 PDF、手写 OOXML（Word） |
+## 发布流程
 
----
+发布由 `.github/workflows/release.yml` 驱动：
 
-## 许可
+1. 创建并推送形如 `v1.2.3` 的版本标签。
+2. GitHub Actions 使用 Go、Node.js 和 Wails 构建 Windows 用户级安装包。
+3. 工作流运行 Go/TypeScript 质量门禁，生成 `SHA256SUMS.txt`。
+4. 安装包和校验文件发布到 GitHub Release。
 
-[MIT](LICENSE)
+## 参与贡献
 
----
+欢迎提交 Issue 和 Pull Request。提交前请：
 
-<div align="center">
-<sub>友链 · <a href="https://linux.do"><b>linux.do</b></a></sub>
-</div>
+1. 确认没有包含真实笔记、凭据、`node_modules` 或构建输出。
+2. 为行为变化补充聚焦测试，尤其是 Windows 路径、回收站和外部修改场景。
+3. 运行上面的质量检查，并在 PR 中说明用户可见变化和验证命令。
+4. UI 改动请附带前后截图，并保持现有 Windows-first 交互和视觉语言。
 
+## 许可证
+
+[MIT License](LICENSE)
+
+## 项目链接
+
+- [最新 Release](https://github.com/7788dev/qiaoji/releases)
+- [Issue tracker](https://github.com/7788dev/qiaoji/issues)

@@ -1,6 +1,9 @@
 package store
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -66,11 +69,66 @@ func (v *Vault) IsInitialised() bool {
 }
 
 func (v *Vault) MarkInitialised() error {
-	payload := fmt.Sprintf(
-		"{\n  \"createdAt\": %q,\n  \"note\": \"巧记 用这个文件记录笔记库已初始化，删除它会在下次启动时重新写入示例笔记。\"\n}\n",
-		time.Now().Format(time.RFC3339),
-	)
-	return os.WriteFile(v.InternalPath(markerFile), []byte(payload), 0o644)
+	marker, _ := v.readMarker()
+	if marker.CreatedAt == "" {
+		marker.CreatedAt = time.Now().Format(time.RFC3339)
+	}
+	marker.Note = "巧记 用这个文件记录笔记库已初始化，删除它会在下次启动时重新写入示例笔记。"
+	return v.writeMarker(marker)
+}
+
+type vaultMarker struct {
+	CreatedAt string `json:"createdAt"`
+	VaultID   string `json:"vaultId,omitempty"`
+	Note      string `json:"note"`
+}
+
+func (v *Vault) readMarker() (vaultMarker, error) {
+	data, err := os.ReadFile(v.InternalPath(markerFile))
+	if err != nil {
+		return vaultMarker{}, err
+	}
+	var marker vaultMarker
+	if err := json.Unmarshal(data, &marker); err != nil {
+		return vaultMarker{}, err
+	}
+	return marker, nil
+}
+
+func (v *Vault) writeMarker(marker vaultMarker) error {
+	data, err := json.MarshalIndent(marker, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return writeAtomic(v.InternalPath(markerFile), data)
+}
+
+// VaultID returns a persistent opaque identifier used to locate disposable
+// AppData caches. It lives in the app-owned marker, never in Markdown files.
+func (v *Vault) VaultID() (string, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	marker, err := v.readMarker()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("read vault marker: %w", err)
+	}
+	if marker.VaultID != "" {
+		return marker.VaultID, nil
+	}
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", err
+	}
+	marker.VaultID = hex.EncodeToString(random[:])
+	if marker.CreatedAt == "" {
+		marker.CreatedAt = time.Now().Format(time.RFC3339)
+	}
+	marker.Note = "巧记 用这个文件记录笔记库已初始化，删除它会在下次启动时重新写入示例笔记。"
+	if err := v.writeMarker(marker); err != nil {
+		return "", err
+	}
+	return marker.VaultID, nil
 }
 
 // IsEmpty reports whether the vault has no notes yet, which drives first-run
@@ -195,7 +253,8 @@ func (v *Vault) readNote(abs string) (Note, error) {
 			Size:     info.Size(),
 			Revision: revisionOf(raw),
 		},
-		Content: body,
+		Content:     body,
+		FileModTime: info.ModTime(),
 	}, nil
 }
 
@@ -215,6 +274,16 @@ func (v *Vault) contains(abs string) bool {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func (v *Vault) isInternal(abs string) bool {
+	rel, err := filepath.Rel(v.root, abs)
+	if err != nil {
+		return true
+	}
+	rel = filepath.Clean(rel)
+	return strings.EqualFold(rel, InternalDir) ||
+		strings.HasPrefix(strings.ToLower(rel), strings.ToLower(InternalDir+string(filepath.Separator)))
 }
 
 // ---------------------------------------------------------------- writing
@@ -593,24 +662,45 @@ func (v *Vault) CreateFolder(name string) (Folder, error) {
 }
 
 func (v *Vault) RenameFolder(rel, name string) error {
+	_, err := v.RenameFolderTo(rel, name)
+	return err
+}
+
+// RenameFolderTo returns the normalized new relative path so callers can
+// update only the moved subtree in their indexes.
+func (v *Vault) RenameFolderTo(rel, name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if rel == "" || name == "" {
-		return errors.New("参数无效")
+		return "", errors.New("参数无效")
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	src := filepath.Join(v.root, filepath.FromSlash(rel))
 	dst := filepath.Join(filepath.Dir(src), slugify(name))
-	if !v.contains(src) || !v.contains(dst) {
-		return errors.New("folder outside vault")
+	if !v.contains(src) || !v.contains(dst) || v.isInternal(src) || v.isInternal(dst) {
+		return "", errors.New("folder outside vault")
+	}
+	info, err := os.Stat(src)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", errors.New("路径不是文件夹")
 	}
 	if strings.EqualFold(src, dst) {
-		return nil
+		return rel, nil
 	}
 	if _, err := os.Stat(dst); err == nil {
-		return ErrExists
+		return "", ErrExists
 	}
-	return os.Rename(src, dst)
+	if err := os.Rename(src, dst); err != nil {
+		return "", err
+	}
+	newRel, err := filepath.Rel(v.root, dst)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(newRel), nil
 }
 
 // DeleteFolder moves the folder and everything in it to the trash as one

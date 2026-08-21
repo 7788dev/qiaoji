@@ -34,14 +34,19 @@ func main() {
 	app.tray = tray
 
 	err := wails.Run(&options.App{
-		Title:                    "巧记",
-		Width:                    s.Window.Width,
-		Height:                   s.Window.Height,
-		MinWidth:                 900,
-		MinHeight:                600,
-		StartHidden:              startHidden,
-		Frameless:                true,
-		DisableResize:            false,
+		Title:         "巧记",
+		Width:         s.Window.Width,
+		Height:        s.Window.Height,
+		MinWidth:      900,
+		MinHeight:     600,
+		StartHidden:   startHidden,
+		Frameless:     true,
+		DisableResize: false,
+		// Keep the custom title bar wired explicitly. Wails currently supplies
+		// these defaults, but declaring them here prevents a framework-default
+		// change from silently turning the whole frameless window immovable.
+		CSSDragProperty:          "--wails-draggable",
+		CSSDragValue:             "drag",
 		BackgroundColour:         backgroundFor(s.Theme),
 		WindowStartState:         startState(s),
 		EnableDefaultContextMenu: false,
@@ -105,9 +110,9 @@ func startState(s config.Settings) options.WindowStartState {
 
 func backgroundFor(theme string) *options.RGBA {
 	if theme == "dark" {
-		return &options.RGBA{R: 0x1a, G: 0x1d, B: 0x21, A: 1}
+		return &options.RGBA{R: 0x11, G: 0x13, B: 0x15, A: 1}
 	}
-	return &options.RGBA{R: 0xf0, G: 0xf1, B: 0xf2, A: 1}
+	return &options.RGBA{R: 0xf6, G: 0xf7, B: 0xf9, A: 1}
 }
 
 func themeFor(theme string) windows.Theme {
@@ -242,6 +247,7 @@ func (a *App) ShowWindow() {
 		return
 	}
 	showWindow(a.ctx)
+	a.emit("window:focus", nil)
 }
 
 func (a *App) releaseCloseWaiterLocked() {
@@ -337,10 +343,10 @@ func (a *App) ApplyTheme(theme string) {
 	switch theme {
 	case "dark":
 		wruntime.WindowSetDarkTheme(a.ctx)
-		wruntime.WindowSetBackgroundColour(a.ctx, 0x1a, 0x1d, 0x21, 255)
+		wruntime.WindowSetBackgroundColour(a.ctx, 0x11, 0x13, 0x15, 255)
 	case "light":
 		wruntime.WindowSetLightTheme(a.ctx)
-		wruntime.WindowSetBackgroundColour(a.ctx, 0xf0, 0xf1, 0xf2, 255)
+		wruntime.WindowSetBackgroundColour(a.ctx, 0xf6, 0xf7, 0xf9, 255)
 	default:
 		wruntime.WindowSetSystemDefaultTheme(a.ctx)
 	}

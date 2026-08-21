@@ -1,8 +1,11 @@
 package store
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +26,13 @@ var assetExtensions = map[string]string{
 // single note is deleted: another note may reference the same file, and
 // preserving an orphan is safer than deleting user data.
 func (v *Vault) SaveAsset(notePath, filename string, data []byte) (string, error) {
+	return v.SaveAssetReader(notePath, filename, bytes.NewReader(data))
+}
+
+// SaveAssetReader streams an image into the vault without keeping a second
+// copy of the whole upload in memory. The first bytes are buffered only long
+// enough to validate the real image type rather than trusting its filename.
+func (v *Vault) SaveAssetReader(notePath, filename string, src io.Reader) (string, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
@@ -39,14 +49,15 @@ func (v *Vault) SaveAsset(notePath, filename string, data []byte) (string, error
 		}
 		return "", ErrNotFound
 	}
-	if len(data) == 0 {
+	reader := bufio.NewReader(io.LimitReader(src, maxAssetSize+1))
+	header, peekErr := reader.Peek(512)
+	if len(header) == 0 {
+		if peekErr != nil && !errors.Is(peekErr, io.EOF) {
+			return "", peekErr
+		}
 		return "", errors.New("图片内容为空")
 	}
-	if len(data) > maxAssetSize {
-		return "", fmt.Errorf("图片超过 %d MB 限制", maxAssetSize>>20)
-	}
-
-	contentType := http.DetectContentType(data)
+	contentType := http.DetectContentType(header)
 	ext, ok := assetExtensions[contentType]
 	if !ok {
 		return "", errors.New("仅支持 PNG、JPEG、GIF 和 WebP 图片")
@@ -70,7 +81,38 @@ func (v *Vault) SaveAsset(notePath, filename string, data []byte) (string, error
 		return "", errors.New("附件目录不在笔记库内")
 	}
 	target := uniqueAssetPath(dir, base, ext)
-	if err := writeAtomic(target, data); err != nil {
+	tmp, err := os.CreateTemp(dir, ".qiaoji-asset-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		cleanup()
+		return "", err
+	}
+	written, err := io.Copy(tmp, reader)
+	if err != nil {
+		cleanup()
+		return "", err
+	}
+	if written > maxAssetSize {
+		cleanup()
+		return "", fmt.Errorf("图片超过 %d MB 限制", maxAssetSize>>20)
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return "", err
+	}
+	if err := replaceFile(tmpName, target); err != nil {
+		_ = os.Remove(tmpName)
 		return "", err
 	}
 	return filepath.ToSlash(filepath.Join("assets", filepath.Base(target))), nil

@@ -29,15 +29,9 @@ import {
 import { syntaxTree } from "@codemirror/language";
 import { katexInstance, loadKatex } from "./markdown";
 
-/**
- * Documents beyond this size skip maths decoration entirely. Rebuilding over
- * the whole document on every keystroke is cheap for notes and pointless for
- * a pasted-in megabyte of log output.
- */
-const MAX_DOC = 400_000;
-
 /** Dispatched once KaTeX finishes loading, to repaint the pending widgets. */
 const katexLoaded = StateEffect.define<null>();
+const viewportChanged = StateEffect.define<readonly ScanRange[]>();
 
 class MathWidget extends WidgetType {
   constructor(
@@ -103,6 +97,11 @@ interface MathRange {
   display: boolean;
 }
 
+interface ScanRange {
+  from: number;
+  to: number;
+}
+
 /** Syntax nodes where a `$` is literal text rather than the start of a formula. */
 const CODE_NODES = /Code|Comment|URL|Link/;
 
@@ -115,36 +114,38 @@ function insideCode(state: EditorState, pos: number): boolean {
   }
 }
 
-/** Finds `$$ … $$` fences, which always occupy whole lines. */
-function blockRanges(state: EditorState): MathRange[] {
+/** Finds `$$ … $$` fences near the visible document ranges. */
+function blockRanges(state: EditorState, scans: readonly ScanRange[]): MathRange[] {
   const out: MathRange[] = [];
   const doc = state.doc;
-  let openLine = -1;
+  for (const scan of scans) {
+    let openLine = -1;
+    const firstLine = doc.lineAt(scan.from).number;
+    const lastLine = doc.lineAt(Math.max(scan.from, scan.to - 1)).number;
+    for (let n = firstLine; n <= lastLine; n++) {
+      const line = doc.line(n);
+      const text = line.text.trim();
 
-  for (let n = 1; n <= doc.lines; n++) {
-    const line = doc.line(n);
-    const text = line.text.trim();
-
-    if (openLine < 0) {
-      // Single-line form: $$ x = 1 $$
-      if (text.length > 4 && text.startsWith("$$") && text.endsWith("$$")) {
-        out.push({
-          from: line.from,
-          to: line.to,
-          source: text.slice(2, -2).trim(),
-          display: true,
-        });
+      if (openLine < 0) {
+        if (text.length > 4 && text.startsWith("$$") && text.endsWith("$$")) {
+          out.push({
+            from: line.from,
+            to: line.to,
+            source: text.slice(2, -2).trim(),
+            display: true,
+          });
+          continue;
+        }
+        if (text === "$$") openLine = n;
         continue;
       }
-      if (text === "$$") openLine = n;
-      continue;
-    }
 
-    if (text === "$$") {
-      const start = doc.line(openLine);
-      const source = doc.sliceString(start.to + 1, line.from).trim();
-      if (source) out.push({ from: start.from, to: line.to, source, display: true });
-      openLine = -1;
+      if (text === "$$") {
+        const start = doc.line(openLine);
+        const source = doc.sliceString(start.to + 1, line.from).trim();
+        if (source) out.push({ from: start.from, to: line.to, source, display: true });
+        openLine = -1;
+      }
     }
   }
   return out;
@@ -152,22 +153,26 @@ function blockRanges(state: EditorState): MathRange[] {
 
 const INLINE = /(?<!\$)\$([^$\n]+?)\$(?!\$)/g;
 
-function inlineRanges(state: EditorState, skip: MathRange[]): MathRange[] {
+function inlineRanges(
+  state: EditorState,
+  skip: MathRange[],
+  scans: readonly ScanRange[],
+): MathRange[] {
   const out: MathRange[] = [];
-  const text = state.doc.toString();
-  INLINE.lastIndex = 0;
-
-  let match: RegExpExecArray | null;
-  while ((match = INLINE.exec(text)) !== null) {
-    const from = match.index;
-    const to = from + match[0].length;
-    const source = match[1].trim();
-    if (!source) continue;
-    // A digit right after the closing "$" usually means currency, not maths.
-    if (/\d/.test(text[to] ?? "")) continue;
-    if (skip.some((b) => from >= b.from && to <= b.to)) continue;
-    if (insideCode(state, from + 1)) continue;
-    out.push({ from, to, source, display: false });
+  for (const scan of scans) {
+    const text = state.doc.sliceString(scan.from, scan.to);
+    INLINE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = INLINE.exec(text)) !== null) {
+      const from = scan.from + match.index;
+      const to = from + match[0].length;
+      const source = match[1].trim();
+      if (!source) continue;
+      if (/\d/.test(state.doc.sliceString(to, to + 1))) continue;
+      if (skip.some((block) => from >= block.from && to <= block.to)) continue;
+      if (insideCode(state, from + 1)) continue;
+      out.push({ from, to, source, display: false });
+    }
   }
   return out;
 }
@@ -182,20 +187,24 @@ function inlineRanges(state: EditorState, skip: MathRange[]): MathRange[] {
  * immutable, so identity is a sound cache key.
  */
 let scannedDoc: EditorState["doc"] | null = null;
+let scannedKey = "";
 let scannedRanges: MathRange[] = [];
 
-function rangesFor(state: EditorState): MathRange[] {
-  if (scannedDoc === state.doc) return scannedRanges;
-  const blocks = blockRanges(state);
-  scannedRanges = [...blocks, ...inlineRanges(state, blocks)].sort((a, b) => a.from - b.from);
+function rangesFor(state: EditorState, scans: readonly ScanRange[]): MathRange[] {
+  const key = scans.map((range) => `${range.from}:${range.to}`).join("|");
+  if (scannedDoc === state.doc && scannedKey === key) return scannedRanges;
+  const blocks = blockRanges(state, scans);
+  scannedRanges = [...blocks, ...inlineRanges(state, blocks, scans)].sort(
+    (a, b) => a.from - b.from,
+  );
   scannedDoc = state.doc;
+  scannedKey = key;
   return scannedRanges;
 }
 
-function build(state: EditorState): DecorationSet {
-  if (state.doc.length > MAX_DOC) return Decoration.none;
-
-  const ranges = rangesFor(state);
+function build(state: EditorState, scans: readonly ScanRange[]): DecorationSet {
+  if (scans.length === 0) return Decoration.none;
+  const ranges = rangesFor(state, scans);
   if (ranges.length === 0) return Decoration.none;
 
   const builder = new RangeSetBuilder<Decoration>();
@@ -225,17 +234,25 @@ function build(state: EditorState): DecorationSet {
   return builder.finish();
 }
 
-const mathField = StateField.define<DecorationSet>({
-  create: (state) => build(state),
+interface MathFieldValue {
+  decorations: DecorationSet;
+  scans: readonly ScanRange[];
+}
+
+const mathField = StateField.define<MathFieldValue>({
+  create: () => ({ decorations: Decoration.none, scans: [] }),
   update(current, tr) {
-    const relevant =
-      tr.docChanged ||
-      tr.selection !== undefined ||
-      tr.effects.some((effect) => effect.is(katexLoaded));
-    if (!relevant) return current.map(tr.changes);
-    return build(tr.state);
+    let scans = current.scans;
+    let rebuild = tr.effects.some((effect) => effect.is(katexLoaded));
+    for (const effect of tr.effects) {
+      if (!effect.is(viewportChanged)) continue;
+      scans = effect.value;
+      rebuild = true;
+    }
+    if (rebuild) return { scans, decorations: build(tr.state, scans) };
+    return { scans, decorations: current.decorations.map(tr.changes) };
   },
-  provide: (field) => EditorView.decorations.from(field),
+  provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
 });
 
 /**
@@ -247,6 +264,62 @@ export function refreshMath(view: EditorView): void {
   if (!view.dom.isConnected) return;
   view.dispatch({ effects: katexLoaded.of(null) });
 }
+
+function visibleScanRanges(view: EditorView): ScanRange[] {
+  const doc = view.state.doc;
+  const expanded = view.visibleRanges.map((range) => {
+    const first = Math.max(1, doc.lineAt(range.from).number - 40);
+    const last = Math.min(doc.lines, doc.lineAt(Math.max(range.from, range.to - 1)).number + 40);
+    return { from: doc.line(first).from, to: doc.line(last).to };
+  });
+  expanded.sort((a, b) => a.from - b.from);
+  const merged: ScanRange[] = [];
+  for (const range of expanded) {
+    const previous = merged[merged.length - 1];
+    if (previous && range.from <= previous.to + 1) {
+      previous.to = Math.max(previous.to, range.to);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+
+/** Pushes viewport changes into the state field outside the editor update. */
+const viewportMath = ViewPlugin.fromClass(
+  class {
+    private scheduled = false;
+    private force = false;
+    private signature = "";
+
+    constructor(view: EditorView) {
+      this.schedule(view, true);
+    }
+
+    update(update: ViewUpdate): void {
+      if (update.docChanged || update.selectionSet || update.viewportChanged) {
+        this.schedule(update.view, update.docChanged || update.selectionSet);
+      }
+    }
+
+    private schedule(view: EditorView, force: boolean): void {
+      this.force ||= force;
+      if (this.scheduled) return;
+      this.scheduled = true;
+      queueMicrotask(() => {
+        this.scheduled = false;
+        if (!view.dom.isConnected) return;
+        const scans = visibleScanRanges(view);
+        const signature = scans.map((range) => `${range.from}:${range.to}`).join("|");
+        const shouldDispatch = this.force || signature !== this.signature;
+        this.force = false;
+        if (!shouldDispatch) return;
+        this.signature = signature;
+        view.dispatch({ effects: viewportChanged.of(scans) });
+      });
+    }
+  },
+);
 
 /**
  * Loads KaTeX the first time a document contains maths.
@@ -270,7 +343,7 @@ const katexLoader = ViewPlugin.fromClass(
 
     private maybeLoad(view: EditorView): void {
       if (this.requested || katexInstance()) return;
-      if (view.state.field(mathField, false)?.size === 0) return;
+      if (view.state.field(mathField, false)?.decorations.size === 0) return;
       this.requested = true;
       void loadKatex()
         .then(() => refreshMath(view))
@@ -282,4 +355,4 @@ const katexLoader = ViewPlugin.fromClass(
   },
 );
 
-export const mathDecorations: Extension = [mathField, katexLoader];
+export const mathDecorations: Extension = [mathField, viewportMath, katexLoader];

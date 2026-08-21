@@ -59,6 +59,8 @@ type Settings struct {
 	ListView     string `json:"listView"`    // list | grid
 	SortBy       string `json:"sortBy"`      // updated | created | title
 	ShowLivePrev bool   `json:"showLivePreview"`
+	SidebarWidth int    `json:"sidebarWidth"`
+	ListWidth    int    `json:"listWidth"`
 
 	// Export
 	ExportDir        string `json:"exportDir"`
@@ -95,6 +97,8 @@ func Defaults() Settings {
 		ListView:     "list",
 		SortBy:       "updated",
 		ShowLivePrev: true,
+		SidebarWidth: 208,
+		ListWidth:    292,
 
 		ExportDir:        docs,
 		LastExportFormat: "md",
@@ -113,6 +117,9 @@ func Dir() string {
 }
 
 func path() string { return filepath.Join(Dir(), "settings.json") }
+
+// IndexDir is the disposable cache directory for one Markdown vault.
+func IndexDir(vaultID string) string { return filepath.Join(Dir(), "indexes", vaultID) }
 
 type Store struct {
 	mu     sync.RWMutex
@@ -190,6 +197,12 @@ func (s *Settings) normalise() {
 	case "updated", "created", "title":
 	default:
 		s.SortBy = d.SortBy
+	}
+	if s.SidebarWidth < 152 || s.SidebarWidth > 360 {
+		s.SidebarWidth = d.SidebarWidth
+	}
+	if s.ListWidth < 200 || s.ListWidth > 520 {
+		s.ListWidth = d.ListWidth
 	}
 	if s.VaultPath == "" {
 		s.VaultPath = d.VaultPath

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	gort "runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -43,10 +45,12 @@ type App struct {
 	open     *vaultSession
 	vaultErr string
 
-	// selfWriteUntil marks a window during which filesystem events are almost
-	// certainly echoes of our own save, so the UI is told not to treat them as
-	// external edits.
-	selfWriteUntil atomic.Int64
+	// Self writes are tracked per path, never as a vault-wide time window. That
+	// keeps an unrelated external edit visible while autosave is active.
+	selfMu         sync.Mutex
+	selfWrites     map[string]selfWriteMark
+	lastSyncMs     atomic.Int64
+	lastSyncChange atomic.Int64
 
 	// quitRequested distinguishes "close the window" from "exit the app". The
 	// close-to-tray preference applies to the former only.
@@ -75,9 +79,16 @@ const (
 // it, and the watcher's debounced reindex could fire against a database that
 // had just been shut.
 type vaultSession struct {
-	vault   *store.Vault
-	index   *index.Index
-	watcher *watch.Watcher
+	vault     *store.Vault
+	index     *index.Index
+	watcher   *watch.Watcher
+	indexPath string
+
+	syncCh   chan syncRequest
+	syncStop chan struct{}
+	syncDone chan struct{}
+	stateMu  sync.RWMutex
+	state    IndexState
 
 	use    sync.RWMutex
 	closed bool
@@ -103,6 +114,7 @@ func (s *vaultSession) close() {
 		_ = s.watcher.Close()
 		s.watcher = nil
 	}
+	s.stopSync()
 
 	s.use.Lock()
 	s.closed = true
@@ -116,7 +128,11 @@ func (s *vaultSession) close() {
 
 func NewApp() *App {
 	settings, err := config.Load()
-	return &App{settings: settings, settingsErr: err, started: make(chan struct{})}
+	app := &App{
+		settings: settings, settingsErr: err, started: make(chan struct{}),
+		selfWrites: make(map[string]selfWriteMark),
+	}
+	return app
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -174,6 +190,25 @@ type Stats struct {
 	Bytes   int64 `json:"bytes"`
 }
 
+// Diagnostics is collected only when the user opens the performance panel.
+// It contains sizes and counters, never note text or filenames.
+type Diagnostics struct {
+	WorkingSetBytes   int64 `json:"workingSetBytes"`
+	MainProcessBytes  int64 `json:"mainProcessBytes"`
+	WebViewBytes      int64 `json:"webViewBytes"`
+	NodeBytes         int64 `json:"nodeBytes"`
+	OtherProcessBytes int64 `json:"otherProcessBytes"`
+	ProcessCount      int   `json:"processCount"`
+	GoHeapBytes       int64 `json:"goHeapBytes"`
+	VaultBytes        int64 `json:"vaultBytes"`
+	IndexBytes        int64 `json:"indexBytes"`
+	Notes             int   `json:"notes"`
+	Folders           int   `json:"folders"`
+	Tags              int   `json:"tags"`
+	LastSyncMs        int64 `json:"lastSyncMs"`
+	LastSyncChanged   int64 `json:"lastSyncChanged"`
+}
+
 type Bootstrap struct {
 	Settings   config.Settings `json:"settings"`
 	VaultReady bool            `json:"vaultReady"`
@@ -181,6 +216,7 @@ type Bootstrap struct {
 	Version    string          `json:"version"`
 	Error      string          `json:"error"`
 	Stats      Stats           `json:"stats"`
+	IndexState IndexState      `json:"indexState"`
 }
 
 func (a *App) Bootstrap() Bootstrap {
@@ -199,6 +235,7 @@ func (a *App) Bootstrap() Bootstrap {
 	out.VaultReady = ready
 	if ready {
 		out.Stats = a.Stats()
+		out.IndexState = a.IndexState()
 	}
 	// The Run key can be cleared by the user or by a cleanup tool, so the
 	// checkbox reflects the registry rather than our own last write.
@@ -249,30 +286,45 @@ func (a *App) openVault(path string) error {
 		}
 	}
 
-	ix, err := index.Open(v.InternalPath("index.db"))
+	vaultID, err := v.VaultID()
+	if err != nil {
+		return fmt.Errorf("无法建立笔记库标识: %w", err)
+	}
+	indexPath := filepath.Join(config.IndexDir(vaultID), "index.db")
+	legacyPath := v.InternalPath("index.db")
+	if _, migrateErr := index.PrepareExternal(legacyPath, indexPath); migrateErr != nil && a.ctx != nil {
+		runtime.LogWarningf(a.ctx, "migrate index: %v", migrateErr)
+	}
+	ix, err := index.Open(indexPath)
 	if err != nil {
 		// A corrupt index must never block startup; the vault is the truth.
 		// The write-ahead log goes too, or a stale one is replayed into the
 		// database we just recreated.
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			_ = os.Remove(v.InternalPath("index.db" + suffix))
-		}
-		ix, err = index.Open(v.InternalPath("index.db"))
+		_ = index.Discard(indexPath)
+		ix, err = index.Open(indexPath)
 		if err != nil {
 			return fmt.Errorf("无法建立搜索索引: %w", err)
 		}
 	}
-	if _, err := ix.Sync(v); err != nil {
-		if rerr := ix.Reset(); rerr == nil {
-			_, _ = ix.Sync(v)
+	if err := ix.IntegrityCheck(); err != nil {
+		_ = ix.Close()
+		_ = index.Discard(indexPath)
+		ix, err = index.Open(indexPath)
+		if err != nil {
+			return fmt.Errorf("无法重建损坏的搜索索引: %w", err)
 		}
 	}
+	cached := ix.Calibrated()
 
-	session := &vaultSession{vault: v, index: ix}
+	session := &vaultSession{
+		vault: v, index: ix, indexPath: indexPath,
+		state: IndexState{Phase: "idle", Ready: cached, Cached: cached},
+	}
+	session.startSync(a)
 	// The watcher reports changes to this library, so its callback works
 	// against this session rather than looking up whichever one is current.
-	if w, werr := watch.New(v.Root(), 400*time.Millisecond, func() {
-		a.onVaultChanged(session)
+	if w, werr := watch.NewWithChanges(v.Root(), 400*time.Millisecond, func(changes watch.ChangeSet) {
+		a.onVaultChanges(session, changes)
 	}); werr == nil {
 		session.watcher = w
 	}
@@ -288,29 +340,10 @@ func (a *App) openVault(path string) error {
 	if previous != nil {
 		previous.close()
 	}
+	// A valid cache makes the first page immediately available. Disk
+	// reconciliation happens strictly after the session is published.
+	session.enqueue(syncRequest{full: true, external: true})
 	return nil
-}
-
-func (a *App) onVaultChanged(s *vaultSession) {
-	if !s.acquire() {
-		return
-	}
-	defer s.release()
-
-	changed, err := s.index.Sync(s.vault)
-	if err != nil {
-		// Discarding this used to turn a persistently failing index into a
-		// silently empty note list.
-		if a.ctx != nil {
-			runtime.LogErrorf(a.ctx, "index sync: %v", err)
-		}
-		return
-	}
-	if changed == 0 {
-		return
-	}
-	external := time.Now().UnixMilli() > a.selfWriteUntil.Load()
-	a.emit("vault:changed", map[string]any{"external": external, "changed": changed})
 }
 
 func (a *App) session() *vaultSession {
@@ -337,11 +370,6 @@ func (a *App) emit(name string, payload any) {
 	runtime.EventsEmit(a.ctx, name, payload)
 }
 
-// touch widens the window in which filesystem events count as our own.
-func (a *App) touch() {
-	a.selfWriteUntil.Store(time.Now().Add(1500 * time.Millisecond).UnixMilli())
-}
-
 // SelectVaultDir opens the native folder picker.
 func (a *App) SelectVaultDir() (string, error) {
 	s := a.settings.Get()
@@ -358,9 +386,81 @@ func (a *App) Stats() Stats {
 		return Stats{}
 	}
 	defer done()
-	folders, _ := v.Folders()
+	folders, _ := ix.Folders()
 	tags, _ := ix.Tags()
 	return a.statsFrom(v, ix, len(folders), len(tags))
+}
+
+func (a *App) Diagnostics() (Diagnostics, error) {
+	v, ix, done, err := a.need()
+	if err != nil {
+		return Diagnostics{}, err
+	}
+	defer done()
+
+	folders, _ := ix.Folders()
+	tags, _ := ix.Tags()
+	summary, _ := ix.Summary()
+	var mem gort.MemStats
+	gort.ReadMemStats(&mem)
+
+	vaultBytes, indexBytes := diagnosticsSize(v, ix.Path())
+	processes := processTreeMemory()
+
+	return Diagnostics{
+		WorkingSetBytes:   processes.TotalBytes,
+		MainProcessBytes:  processes.MainBytes,
+		WebViewBytes:      processes.WebViewBytes,
+		NodeBytes:         processes.NodeBytes,
+		OtherProcessBytes: processes.OtherBytes,
+		ProcessCount:      processes.ProcessCount,
+		GoHeapBytes:       int64(mem.HeapAlloc),
+		VaultBytes:        vaultBytes,
+		IndexBytes:        indexBytes,
+		Notes:             summary.Notes,
+		Folders:           len(folders),
+		Tags:              len(tags),
+		LastSyncMs:        a.lastSyncMs.Load(),
+		LastSyncChanged:   a.lastSyncChange.Load(),
+	}, nil
+}
+
+// diagnosticsSize deliberately excludes .qiaoji while measuring the vault so
+// the separately reported index is not counted twice.
+func diagnosticsSize(v *store.Vault, indexPath string) (vaultBytes, indexBytes int64) {
+	internalRoot := filepath.Clean(v.InternalPath())
+	vaultBytes = walkSize(v.Root(), func(path string, d fs.DirEntry) bool {
+		return d.IsDir() && filepath.Clean(path) == internalRoot
+	})
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if info, err := os.Stat(indexPath + suffix); err == nil {
+			indexBytes += info.Size()
+		}
+	}
+	return vaultBytes, indexBytes
+}
+
+func walkSize(root string, skip func(string, fs.DirEntry) bool) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if path != root && skip != nil && skip(path, d) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		if info, infoErr := d.Info(); infoErr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 // statsFrom totals the library from SQL aggregates and a directory count,
@@ -394,7 +494,7 @@ func (a *App) Sidebar() (SidebarData, error) {
 		return SidebarData{}, err
 	}
 	defer done()
-	folders, err := v.Folders()
+	folders, err := ix.Folders()
 	if err != nil {
 		return SidebarData{}, err
 	}
@@ -411,23 +511,20 @@ func (a *App) Sidebar() (SidebarData, error) {
 
 // RebuildIndex throws away the search index and rebuilds it from disk.
 func (a *App) RebuildIndex() (Stats, error) {
-	v, ix, done, err := a.need()
-	if err != nil {
-		return Stats{}, err
+	s := a.session()
+	if s == nil || !s.acquire() {
+		return Stats{}, errors.New("尚未打开笔记库")
 	}
-	defer done()
-	if err := ix.Reset(); err != nil {
-		return Stats{}, err
-	}
-	if _, err := ix.Sync(v); err != nil {
+	defer s.release()
+	if _, err := waitSync(s, syncRequest{full: true, reset: true, external: false}); err != nil {
 		return Stats{}, err
 	}
 	// Computed here rather than through Stats(): acquiring the session a
 	// second time while already holding it would deadlock behind a library
 	// switch waiting for its exclusive turn.
-	folders, _ := v.Folders()
-	tags, _ := ix.Tags()
-	return a.statsFrom(v, ix, len(folders), len(tags)), nil
+	folders, _ := s.index.Folders()
+	tags, _ := s.index.Tags()
+	return a.statsFrom(s.vault, s.index, len(folders), len(tags)), nil
 }
 
 // ---------------------------------------------------------------- notes
@@ -442,12 +539,12 @@ func (a *App) ListNotes(q index.Query) ([]store.Meta, error) {
 }
 
 func (a *App) ListFolders() ([]store.Folder, error) {
-	v, _, done, err := a.need()
+	_, ix, done, err := a.need()
 	if err != nil {
 		return nil, err
 	}
 	defer done()
-	return v.Folders()
+	return ix.Folders()
 }
 
 func (a *App) ListTags() ([]store.Tag, error) {
@@ -499,7 +596,6 @@ func (a *App) CreateNote(folder, title string) (store.Note, error) {
 		return store.Note{}, err
 	}
 	defer done()
-	a.touch()
 	n, err := v.Create(folder, title, "")
 	if err != nil {
 		return store.Note{}, err
@@ -507,6 +603,7 @@ func (a *App) CreateNote(folder, title string) (store.Note, error) {
 	if err := updateIndexedNote(ix, n, ""); err != nil {
 		return n, err
 	}
+	a.markSelfPath(n.Path, false)
 	return n, nil
 }
 
@@ -516,7 +613,7 @@ func (a *App) SaveNote(path, content, expectedRevision string, force bool) (stor
 		return store.Meta{}, err
 	}
 	defer done()
-	a.touch()
+	a.markSelfPath(path, false)
 	n, err := v.SaveIfRevision(path, content, expectedRevision, force)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -527,6 +624,7 @@ func (a *App) SaveNote(path, content, expectedRevision string, force bool) (stor
 	if err := updateIndexedNote(ix, n, path); err != nil {
 		return n.Meta, err
 	}
+	a.markSelfPath(n.Path, false)
 	return n.Meta, nil
 }
 
@@ -536,7 +634,7 @@ func (a *App) SaveAsset(notePath, filename string, data []byte) (string, error) 
 		return "", err
 	}
 	defer done()
-	a.touch()
+	a.markSelfPath(filepath.Dir(notePath), true)
 	return v.SaveAsset(notePath, filename, data)
 }
 
@@ -546,7 +644,7 @@ func (a *App) RenameNote(path, title string) (store.Meta, error) {
 		return store.Meta{}, err
 	}
 	defer done()
-	a.touch()
+	a.markSelfPath(path, false)
 	n, err := v.Rename(path, title)
 	if err != nil {
 		return store.Meta{}, err
@@ -554,6 +652,7 @@ func (a *App) RenameNote(path, title string) (store.Meta, error) {
 	if err := updateIndexedNote(ix, n, path); err != nil {
 		return n.Meta, err
 	}
+	a.markSelfPath(n.Path, false)
 	return n.Meta, nil
 }
 
@@ -563,7 +662,7 @@ func (a *App) MoveNote(path, folder string) (store.Meta, error) {
 		return store.Meta{}, err
 	}
 	defer done()
-	a.touch()
+	a.markSelfPath(path, false)
 	n, err := v.Move(path, folder)
 	if err != nil {
 		return store.Meta{}, err
@@ -571,6 +670,7 @@ func (a *App) MoveNote(path, folder string) (store.Meta, error) {
 	if err := updateIndexedNote(ix, n, path); err != nil {
 		return n.Meta, err
 	}
+	a.markSelfPath(n.Path, false)
 	return n.Meta, nil
 }
 
@@ -580,7 +680,6 @@ func (a *App) DuplicateNote(path string) (store.Meta, error) {
 		return store.Meta{}, err
 	}
 	defer done()
-	a.touch()
 	n, err := v.Duplicate(path)
 	if err != nil {
 		return store.Meta{}, err
@@ -588,6 +687,7 @@ func (a *App) DuplicateNote(path string) (store.Meta, error) {
 	if err := updateIndexedNote(ix, n, ""); err != nil {
 		return n.Meta, err
 	}
+	a.markSelfPath(n.Path, false)
 	return n.Meta, nil
 }
 
@@ -597,7 +697,7 @@ func (a *App) SetFavorite(path string, favorite bool) (store.Meta, error) {
 		return store.Meta{}, err
 	}
 	defer done()
-	a.touch()
+	a.markSelfPath(path, false)
 	n, err := v.SetFavorite(path, favorite)
 	if err != nil {
 		return store.Meta{}, err
@@ -614,7 +714,7 @@ func (a *App) SetNoteTags(path string, tags []string) (store.Meta, error) {
 		return store.Meta{}, err
 	}
 	defer done()
-	a.touch()
+	a.markSelfPath(path, false)
 	n, err := v.SetTags(path, tags)
 	if err != nil {
 		return store.Meta{}, err
@@ -633,7 +733,7 @@ func (a *App) DeleteNote(path string) (store.TrashItem, error) {
 		return store.TrashItem{}, err
 	}
 	defer done()
-	a.touch()
+	a.markSelfPath(path, false)
 	item, err := v.Trash(path)
 	if err != nil {
 		return store.TrashItem{}, err
@@ -660,7 +760,6 @@ func (a *App) RestoreNote(entryID string) (store.Restored, error) {
 		return store.Restored{}, err
 	}
 	defer done()
-	a.touch()
 	out, err := v.Restore(entryID)
 	if err != nil {
 		return store.Restored{}, err
@@ -668,7 +767,9 @@ func (a *App) RestoreNote(entryID string) (store.Restored, error) {
 	if out.Kind == store.TrashFolder {
 		// The restored notes are absent from the index, so a stat walk picks
 		// up exactly them and leaves the rest of the library alone.
-		if _, err := ix.Sync(v); err != nil {
+		restoredDir := filepath.Join(v.Root(), filepath.FromSlash(out.Folder))
+		a.markSelfPath(restoredDir, true)
+		if _, err := ix.SyncChanges(v, watch.ChangeSet{Created: []string{restoredDir}, Dirs: []string{restoredDir}}); err != nil {
 			return out, fmt.Errorf("恢复后的索引同步失败: %w", err)
 		}
 		return out, nil
@@ -676,6 +777,7 @@ func (a *App) RestoreNote(entryID string) (store.Restored, error) {
 	if err := updateIndexedNote(ix, out.Note, ""); err != nil {
 		return out, err
 	}
+	a.markSelfPath(out.Note.Path, false)
 	return out, nil
 }
 
@@ -700,40 +802,50 @@ func (a *App) EmptyTrash() error {
 // ---------------------------------------------------------------- folders
 
 func (a *App) CreateFolder(name string) (store.Folder, error) {
-	v, _, done, err := a.need()
+	v, ix, done, err := a.need()
 	if err != nil {
 		return store.Folder{}, err
 	}
 	defer done()
-	a.touch()
 	f, err := v.CreateFolder(name)
 	if errors.Is(err, store.ErrExists) {
 		return store.Folder{}, errors.New("已存在同名文件夹")
 	}
+	if err == nil {
+		_ = ix.AddFolder(f.Path)
+		a.markSelfPath(filepath.Join(v.Root(), filepath.FromSlash(f.Path)), true)
+	}
 	return f, err
 }
 
-func (a *App) RenameFolder(rel, name string) error {
+// RenameFolder returns the normalized relative path so the UI can keep the
+// active folder scope aligned with the path that actually exists on disk.
+func (a *App) RenameFolder(rel, name string) (string, error) {
 	v, ix, done, err := a.need()
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer done()
-	a.touch()
-	if err := v.RenameFolder(rel, name); err != nil {
+	oldDir := filepath.Join(v.Root(), filepath.FromSlash(rel))
+	a.markSelfPath(oldDir, true)
+	newRel, err := v.RenameFolderTo(rel, name)
+	if err != nil {
 		if errors.Is(err, store.ErrExists) {
-			return errors.New("已存在同名文件夹")
+			return "", errors.New("已存在同名文件夹")
 		}
-		return err
+		return "", err
 	}
+	newDir := filepath.Join(v.Root(), filepath.FromSlash(newRel))
+	a.markSelfPath(newDir, true)
 	// Only the moved subtree is dropped; the following stat walk re-reads
 	// those notes and nothing else. Rebuilding the whole index here cost the
 	// full cold-start price for renaming one directory.
 	if err := ix.RemoveUnder(rel); err != nil {
-		return err
+		return "", err
 	}
-	_, err = ix.Sync(v)
-	return err
+	_ = ix.RenameFolder(rel, newRel)
+	_, err = ix.SyncChanges(v, watch.ChangeSet{Created: []string{newDir}, Dirs: []string{newDir}})
+	return newRel, err
 }
 
 // DeleteFolder moves a folder and everything inside it to the trash as one
@@ -744,12 +856,16 @@ func (a *App) DeleteFolder(rel string) (store.TrashItem, error) {
 		return store.TrashItem{}, err
 	}
 	defer done()
-	a.touch()
+	a.markSelfPath(filepath.Join(v.Root(), filepath.FromSlash(rel)), true)
 	item, err := v.DeleteFolder(rel)
 	if err != nil {
 		return store.TrashItem{}, err
 	}
-	return item, ix.RemoveUnder(rel)
+	if err := ix.RemoveUnder(rel); err != nil {
+		return item, err
+	}
+	_ = ix.RemoveFolder(rel)
+	return item, nil
 }
 
 // ---------------------------------------------------------------- tags
@@ -794,9 +910,9 @@ func (a *App) mutateTag(name string, fn func([]string) []string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	a.touch()
 	n := 0
 	for _, m := range metas {
+		a.markSelfPath(m.Path, false)
 		note, err := v.SetTags(m.Path, fn(m.Tags))
 		if err != nil {
 			return n, err
@@ -919,12 +1035,12 @@ func (a *App) SaveWindowState(width, height, x, y int, maximised bool) {
 
 // SortedFolderNames is used by the "move to folder" picker.
 func (a *App) SortedFolderNames() ([]string, error) {
-	v, _, done, err := a.need()
+	_, ix, done, err := a.need()
 	if err != nil {
 		return nil, err
 	}
 	defer done()
-	folders, err := v.Folders()
+	folders, err := ix.Folders()
 	if err != nil {
 		return nil, err
 	}

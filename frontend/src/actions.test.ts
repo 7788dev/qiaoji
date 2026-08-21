@@ -10,6 +10,8 @@ vi.mock("./api", () => ({
   sidebar: vi.fn(),
   stats: vi.fn(),
   listNotes: vi.fn(),
+  listNotesPage: vi.fn(),
+  indexState: vi.fn(),
   listFolders: vi.fn(),
   listTags: vi.fn(),
   listTrash: vi.fn(),
@@ -42,6 +44,7 @@ const saveNote = vi.mocked(api.saveNote);
 
 function makeTab(id: string, content: string): Tab {
   return {
+    kind: "markdown",
     id,
     path: `C:/vault/${id}.md`,
     title: id,
@@ -50,11 +53,15 @@ function makeTab(id: string, content: string): Tab {
     favorite: false,
     tags: [],
     folder: "",
+    created: "2026-01-01T00:00:00Z",
+    updated: "2026-01-01T00:00:00Z",
     scrollTop: 0,
     cursor: 0,
     mode: "edit",
     revision: `revision-${id}`,
     conflict: null,
+    language: "markdown",
+    manualSave: false,
   };
 }
 
@@ -163,6 +170,51 @@ describe("saveAll", () => {
     saveNote.mockRejectedValueOnce(new Error("磁盘已满"));
 
     expect(await actions.saveAll()).toBe(false);
+  });
+});
+
+describe("save queue", () => {
+  it("serializes writes and coalesces edits made during an in-flight save", async () => {
+    const tab = makeTab("a", "A");
+    tab.content = "first edit";
+    state.tabs = [tab];
+    state.activeTabId = tab.id;
+
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    saveNote.mockImplementation(async (_path, _content) => {
+      calls++;
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      if (calls === 1) await firstGate;
+      inFlight--;
+      return { ...metaFor(tab), revision: `saved-${calls}` };
+    });
+
+    const first = actions.saveTab(tab.id, { silent: true });
+    await Promise.resolve();
+    expect(saveNote).toHaveBeenCalledTimes(1);
+
+    tab.content = "latest edit";
+    const latest = actions.saveTab(tab.id, { silent: true });
+    await Promise.resolve();
+    expect(saveNote).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    expect(await Promise.all([first, latest])).toEqual([true, true]);
+
+    expect(maxInFlight).toBe(1);
+    expect(saveNote.mock.calls.map((call) => call[1])).toEqual([
+      "first edit",
+      "latest edit",
+    ]);
+    expect(state.tabs[0].content).toBe("latest edit");
+    expect(state.tabs[0].savedContent).toBe("latest edit");
   });
 });
 
@@ -355,5 +407,32 @@ describe("post-save list merge", () => {
     expect(state.notes[0].words).toBe(9);
     expect(api.listNotes).not.toHaveBeenCalled();
     state.sortBy = "updated";
+  });
+});
+
+describe("rename guards", () => {
+  it("keeps a nested folder scope aligned with the backend's normalized path", async () => {
+    state.scope = "folder";
+    state.scopeValue = "旧目录/子目录";
+    vi.mocked(api.renameFolder).mockResolvedValueOnce("新-目录");
+
+    await actions.renameFolder("旧目录", "新/目录");
+
+    expect(api.renameFolder).toHaveBeenCalledWith("旧目录", "新/目录");
+    expect(state.scopeValue).toBe("新-目录/子目录");
+  });
+
+  it("does not send blank names to the backend", async () => {
+    vi.mocked(api.renameFolder).mockClear();
+    vi.mocked(api.renameNote).mockClear();
+    vi.mocked(api.renameTag).mockClear();
+
+    await actions.renameFolder("目录", "   ");
+    await actions.renameNote("C:/vault/note.md", "\t");
+    await actions.renameTag("旧标签", "#  ");
+
+    expect(api.renameFolder).not.toHaveBeenCalled();
+    expect(api.renameNote).not.toHaveBeenCalled();
+    expect(api.renameTag).not.toHaveBeenCalled();
   });
 });

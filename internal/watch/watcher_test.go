@@ -146,3 +146,15 @@ func TestIgnoresInternalAndTempFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestChangeSetMergesAndDeduplicatesPaths(t *testing.T) {
+	var got ChangeSet
+	got.Merge(ChangeSet{Created: []string{"b", "a"}, Modified: []string{"a"}})
+	got.Merge(ChangeSet{Created: []string{"a"}, Removed: []string{"c"}, Overflow: true})
+	if len(got.Created) != 2 || got.Created[0] != "a" || got.Created[1] != "b" {
+		t.Fatalf("created = %v", got.Created)
+	}
+	if len(got.Paths()) != 3 || !got.Overflow {
+		t.Fatalf("merged set = %+v, paths=%v", got, got.Paths())
+	}
+}

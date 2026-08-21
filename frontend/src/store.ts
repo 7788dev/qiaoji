@@ -13,6 +13,7 @@
 
 import type {
   Folder,
+  IndexState,
   ListView,
   NoteMeta,
   SearchHit,
@@ -38,10 +39,15 @@ export interface AppState {
   listView: ListView;
 
   notes: NoteMeta[];
+  noteTotal: number;
+  nextCursor: string;
   folders: Folder[];
   tags: Tag[];
   trash: TrashItem[];
   loadingList: boolean;
+  loadingMore: boolean;
+  listError: string;
+  indexState: IndexState;
 
   tabs: Tab[];
   activeTabId: string | null;
@@ -61,7 +67,9 @@ export interface AppState {
 
   sidebarVisible: boolean;
   listVisible: boolean;
+  propertiesVisible: boolean;
   saveState: "idle" | "dirty" | "saving" | "saved" | "error";
+
 }
 
 export type StateKey = keyof AppState;
@@ -88,6 +96,8 @@ const defaultSettings: Settings = {
   listView: "list",
   sortBy: "updated",
   showLivePreview: true,
+  sidebarWidth: 208,
+  listWidth: 292,
   exportDir: "",
   lastExportFormat: "md",
   window: { width: 1240, height: 820, x: -1, y: -1, maximised: false },
@@ -106,10 +116,24 @@ export const state: AppState = {
   listView: "list",
 
   notes: [],
+  noteTotal: 0,
+  nextCursor: "",
   folders: [],
   tags: [],
   trash: [],
   loadingList: false,
+  loadingMore: false,
+  listError: "",
+  indexState: {
+    phase: "idle",
+    ready: false,
+    cached: false,
+    processed: 0,
+    total: 0,
+    error: "",
+    lastSyncMs: 0,
+    lastChanged: 0,
+  },
 
   tabs: [],
   activeTabId: null,
@@ -121,7 +145,9 @@ export const state: AppState = {
 
   sidebarVisible: true,
   listVisible: true,
+  propertiesVisible: false,
   saveState: "idle",
+
 };
 
 type Listener = () => void;
@@ -189,11 +215,15 @@ export function hasUnsaved(): boolean {
   return state.tabs.some(isDirty);
 }
 
+export function hasManualUnsaved(): boolean {
+  return state.tabs.some((tab) => tab.manualSave && isDirty(tab));
+}
+
 /** Replaces one tab and republishes the list so subscribers rerender. */
 export function patchTab(id: string, patch: Partial<Tab>): Tab | null {
   const index = state.tabs.findIndex((t) => t.id === id);
   if (index < 0) return null;
-  const next = { ...state.tabs[index], ...patch };
+  const next = { ...state.tabs[index], ...patch } as Tab;
   const tabs = state.tabs.slice();
   tabs[index] = next;
   setState({ tabs });

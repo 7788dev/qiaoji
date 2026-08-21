@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +50,61 @@ func TestSaveAssetWritesDetectedImageSafely(t *testing.T) {
 			t.Fatal("image-only assets directory should not appear as a note folder")
 		}
 	}
+}
+
+func TestSaveAssetReaderStreamsAndKeepsBytes(t *testing.T) {
+	vault, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	note, err := vault.Create("", "Example", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRstreamed")
+	reader := &chunkReader{data: png, size: 3}
+	relative, err := vault.SaveAssetReader(note.Path, "streamed.dat", reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reader.reads < 2 {
+		t.Fatalf("SaveAssetReader used %d read, want several streamed reads", reader.reads)
+	}
+	resolved, err := vault.ResolveAsset(note.Path, relative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, png) {
+		t.Fatalf("saved bytes = %x, want %x", got, png)
+	}
+}
+
+type chunkReader struct {
+	data  []byte
+	size  int
+	reads int
+}
+
+func (r *chunkReader) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	r.reads++
+	n := r.size
+	if n > len(p) {
+		n = len(p)
+	}
+	if n > len(r.data) {
+		n = len(r.data)
+	}
+	copy(p, r.data[:n])
+	r.data = r.data[n:]
+	return n, nil
 }
 
 func TestSaveAssetRejectsNonImagesAndOversizeData(t *testing.T) {

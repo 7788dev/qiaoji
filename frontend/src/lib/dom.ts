@@ -283,8 +283,9 @@ const PATHS: Record<string, string> = {
   sidebar: "M2.8 3.6h10.4v8.8H2.8z M6.4 3.6v8.8 M4.1 6.2h.9 M4.1 8.2h.9",
   columns: "M2.8 3.6h10.4v8.8H2.8z M9.6 3.6v8.8",
   refresh: "M13 8a5 5 0 1 1-1.5-3.5 M13 2.6v3h-3",
+  play: "M5.2 3.4l7 4.6-7 4.6V3.4Z",
 
-  // Formatting glyphs are drawn as letterforms so the toolbar reads at a
+  // Formatting glyphs are drawn as letterforms so compact action menus read at a
   // glance instead of relying on abstract shapes.
   bold: "M5 3.2h3.6a2.4 2.4 0 0 1 0 4.8H5V3.2Z M5 8h4.1a2.4 2.4 0 0 1 0 4.8H5V8Z",
   italic: "M9.8 3.2H6.6 M9.4 12.8H6.2 M9.6 3.2L6.4 12.8",

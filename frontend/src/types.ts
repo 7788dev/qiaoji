@@ -73,11 +73,40 @@ export type ThemeName = "light" | "dark" | "system";
 export type EditorWidth = "narrow" | "medium" | "wide" | "full";
 export type ExportFormat = "md" | "html" | "pdf" | "docx" | "txt";
 
-export interface ListQuery {
+export interface NotePageRequest {
   scope: string;
   value: string;
   sortBy: string;
   limit: number;
+  cursor: string;
+}
+
+export interface NotePage {
+  items: NoteMeta[];
+  total: number;
+  nextCursor: string;
+}
+
+export interface IndexState {
+  phase: "idle" | "building" | "calibrating" | "error";
+  ready: boolean;
+  cached: boolean;
+  processed: number;
+  total: number;
+  error: string;
+  lastSyncMs: number;
+  lastChanged: number;
+}
+
+export interface VaultDelta {
+  upserted: NoteMeta[];
+  previous: NoteMeta[];
+  removed: string[];
+  removedMeta: NoteMeta[];
+  full: boolean;
+  structure: boolean;
+  external: boolean;
+  syncMs: number;
 }
 
 export interface Settings {
@@ -105,6 +134,8 @@ export interface Settings {
   listView: ListView;
   sortBy: SortBy;
   showLivePreview: boolean;
+  sidebarWidth: number;
+  listWidth: number;
 
   exportDir: string;
   lastExportFormat: string;
@@ -121,6 +152,23 @@ export interface Stats {
   bytes: number;
 }
 
+export interface Diagnostics {
+  workingSetBytes: number;
+  mainProcessBytes: number;
+  webViewBytes: number;
+  nodeBytes: number;
+  otherProcessBytes: number;
+  processCount: number;
+  goHeapBytes: number;
+  vaultBytes: number;
+  indexBytes: number;
+  notes: number;
+  folders: number;
+  tags: number;
+  lastSyncMs: number;
+  lastSyncChanged: number;
+}
+
 /** Folders, tags and totals in one round trip, refreshed as a unit. */
 export interface SidebarData {
   folders: Folder[];
@@ -135,6 +183,7 @@ export interface BootstrapPayload {
   version: string;
   error: string;
   stats: Stats;
+  indexState: IndexState;
 }
 
 export interface UpdateInfo {
@@ -154,8 +203,22 @@ export interface ExportRequest {
   hasMath: boolean;
 }
 
-/** One open editor tab. */
-export interface Tab {
+export interface TabConflict {
+  path: string;
+  title: string;
+  content: string;
+  revision: string;
+  favorite?: boolean;
+  tags?: string[];
+  folder?: string;
+  created?: string;
+  updated?: string;
+  hasHeader?: boolean;
+  language?: string;
+  readOnly?: boolean;
+}
+
+interface BaseTab {
   id: string;
   path: string;
   title: string;
@@ -164,11 +227,20 @@ export interface Tab {
   favorite: boolean;
   tags: string[];
   folder: string;
+  created: string;
+  updated: string;
   /** Preserved so switching tabs returns you to where you were reading. */
   scrollTop: number;
   cursor: number;
   mode: "edit" | "preview";
   revision: string;
-  /** Disk version that arrived while this tab had unsaved edits. */
-  conflict: Note | null;
+  conflict: TabConflict | null;
+  language: string;
+  manualSave: boolean;
 }
+
+export interface MarkdownTab extends BaseTab {
+  kind: "markdown";
+}
+
+export type Tab = MarkdownTab;

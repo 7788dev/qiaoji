@@ -12,19 +12,16 @@ import "./styles/katex.css";
 import * as actions from "../src/actions";
 import * as api from "./api";
 import { el, qs } from "./lib/dom";
-import { openSearchPanel as openEditorSearch, openReplacePanel } from "./lib/find";
 import { installShortcuts } from "./shortcuts";
-import { setState, state, subscribe } from "./store";
+import { hasManualUnsaved, hasUnsaved, setState, state, subscribe } from "./store";
 import type { BootstrapPayload, ThemeName } from "./types";
-import { openTagsDialog, openTrashDialog } from "./ui/dialogs";
 import { bindDocumentTitle, createEditorPane } from "./ui/editorpane";
-import { openExportDialog } from "./ui/exportdialog";
 import { createNoteList } from "./ui/notelist";
-import { buildCommands, openPalette, openSearchPanel } from "./ui/palette";
-import { openAbout, openSettings, openShortcuts } from "./ui/settings";
+import { createPanelResizers } from "./ui/panelresizers";
+import { createPropertyDrawer } from "./ui/properties";
 import { createSidebar } from "./ui/sidebar";
 import { createStatusbar } from "./ui/statusbar";
-import { brandMark, createTabbar, createTitlebar, createWindowControls } from "./ui/titlebar";
+import { brandMark, createWindowControls, createWorkspacebar } from "./ui/titlebar";
 import { notify, reportError } from "./ui/toast";
 
 const root = qs(document, "#app");
@@ -76,7 +73,10 @@ function applyTheme(theme: ThemeName): void {
     /* storage unavailable; the flash guard simply falls back to light */
   }
   // Keep the native window frame, resize border and snap preview in step.
-  void api.applyTheme(theme === "system" ? "system" : resolved);
+  // Resolve "system" here as well: this listener runs again when Windows
+  // changes, and passing the concrete colour keeps the native background from
+  // retaining the previous theme between WebView repaints.
+  void api.applyTheme(resolved);
 }
 
 function setTheme(theme: ThemeName): void {
@@ -95,63 +95,123 @@ function applyZoom(): void {
 /* ---------------------------------------------------------------- shell */
 
 function buildShell(): () => void {
+  let body!: HTMLElement;
+  const statusbar = createStatusbar();
   const editorPane = createEditorPane({
     onCursor: (line, column, selected) => statusbar.setCursor(line, column, selected),
   });
 
-  const statusbar = createStatusbar({
-    setMode: (mode) => editorPane.setMode(mode),
-  });
-
+  const openSettingsLazy = () => {
+    void import("./ui/settings").then(
+      (module) => module.openSettings(settingsDeps),
+      (err) => reportError("打开设置", err),
+    );
+  };
+  const openShortcutsLazy = () => {
+    void import("./ui/settings").then(
+      (module) => module.openShortcuts(),
+      (err) => reportError("打开快捷键", err),
+    );
+  };
+  const openAboutLazy = () => {
+    void import("./ui/settings").then(
+      (module) => module.openAbout(),
+      (err) => reportError("打开关于", err),
+    );
+  };
+  const openTagsLazy = () => {
+    void import("./ui/dialogs").then(
+      (module) => module.openTagsDialog(),
+      (err) => reportError("打开标签管理", err),
+    );
+  };
+  const openTrashLazy = () => {
+    void import("./ui/dialogs").then(
+      (module) => module.openTrashDialog(),
+      (err) => reportError("打开回收站", err),
+    );
+  };
+  const openExportLazy = () => {
+    void import("./ui/exportdialog").then(
+      (module) => module.openExportDialog({ currentHtml: editorPane.currentHtml }),
+      (err) => reportError("打开导出", err),
+    );
+  };
+  const openSearchLazy = () => {
+    void import("./ui/palette").then(
+      (module) => module.openSearchPanel(),
+      (err) => reportError("打开搜索", err),
+    );
+  };
+  const openPaletteLazy = () => {
+    void import("./ui/palette").then(
+      (module) => module.openPalette(module.buildCommands(paletteDeps)),
+      (err) => reportError("打开命令面板", err),
+    );
+  };
+  const openEditorFindLazy = (replace = false) => {
+    void import("./lib/find").then(
+      (module) =>
+        replace
+          ? module.openReplacePanel(editorPane.editor.view)
+          : module.openSearchPanel(editorPane.editor.view),
+      (err) => reportError(replace ? "打开替换" : "打开查找", err),
+    );
+  };
   const paletteDeps = {
     toggleMode: () => editorPane.toggleMode(),
-    openExport: () => openExportDialog({ currentHtml: editorPane.currentHtml }),
-    openSettings: () => openSettings(settingsDeps),
-    openShortcuts,
-    openAbout,
-    openTrash: openTrashDialog,
-    openTags: openTagsDialog,
-    openSearch: () => openSearchPanel(),
-    openFind: () => openEditorSearch(editorPane.editor.view),
-    openReplace: () => openReplacePanel(editorPane.editor.view),
+    openExport: openExportLazy,
+    openSettings: openSettingsLazy,
+    openShortcuts: openShortcutsLazy,
+    openAbout: openAboutLazy,
+    openTrash: openTrashLazy,
+    openTags: openTagsLazy,
+    openSearch: openSearchLazy,
+    openFind: () => openEditorFindLazy(false),
+    openReplace: () => openEditorFindLazy(true),
     setTheme,
     toggleSidebar: () => setState({ sidebarVisible: !state.sidebarVisible }),
   };
 
   const settingsDeps = {
-    openShortcuts,
-    openAbout,
+    openShortcuts: openShortcutsLazy,
+    openAbout: openAboutLazy,
     setTheme,
   };
 
-  const commands = buildCommands(paletteDeps);
-
-  const titlebar = createTitlebar({
-    openPalette: () => openPalette(commands),
-    openSearch: () => openSearchPanel(),
-    openSettings: () => openSettings(settingsDeps),
-    toggleSidebar: paletteDeps.toggleSidebar,
-  });
-
-  const tabbar = createTabbar({
+  const workspacebar = createWorkspacebar({
     newNote: () => void actions.newNote(),
-    toggleList: () => setState({ listVisible: !state.listVisible }),
+    openSearch: openSearchLazy,
     toggleMode: () => editorPane.toggleMode(),
-    openExport: paletteDeps.openExport,
+    toggleSidebar: paletteDeps.toggleSidebar,
+    toggleList: () => setState({ listVisible: !state.listVisible }),
+    toggleProperties: () => setState({ propertiesVisible: !state.propertiesVisible }),
     openOutline: (anchor) => editorPane.showOutline(anchor),
+    openEditorActions: (anchor) => editorPane.showActions(anchor),
+    refreshPreview: () => editorPane.refreshPreview(),
+    openExport: paletteDeps.openExport,
+    openTags: openTagsLazy,
+    openTrash: openTrashLazy,
+    openSettings: openSettingsLazy,
+    openPalette: openPaletteLazy,
   });
 
   const sidebar = createSidebar({
-    openTrash: openTrashDialog,
-    openTags: openTagsDialog,
-    openSettings: () => openSettings(settingsDeps),
+    openTrash: openTrashLazy,
+    openTags: openTagsLazy,
   });
 
   const notelist = createNoteList();
-  const body = el("div", { class: "body" }, sidebar, notelist, editorPane.root);
-  const shell = el("div", { class: "shell" }, titlebar, tabbar, body, statusbar.root);
+  sidebar.id = "qiaoji-sidebar";
+  notelist.id = "qiaoji-notelist";
+  const properties = createPropertyDrawer();
+  const editorArea = el("div", { class: "editor-area" }, editorPane.root, properties);
+  body = el("div", { class: "body" }, sidebar, notelist, editorArea);
+  const shell = el("div", { class: "shell" }, workspacebar, body, statusbar.root);
 
   root.replaceChildren(shell);
+  const resizers = createPanelResizers(body);
+  body.appendChild(resizers);
 
   const paintLayout = () => {
     body.classList.toggle("is-sidebar-hidden", !state.sidebarVisible);
@@ -173,7 +233,7 @@ function buildShell(): () => void {
   const uninstallShortcuts = installShortcuts(
     [
       { key: "n", ctrl: true, run: () => void actions.newNote() },
-      { key: "o", ctrl: true, run: () => openPalette(commands) },
+      { key: "o", ctrl: true, run: openPaletteLazy },
       { key: "s", ctrl: true, run: () => void actions.saveActive() },
       // Shift, because the global layer runs in the capture phase and stops
       // propagation: a plain Ctrl+E here meant the editor's inline-code
@@ -187,13 +247,19 @@ function buildShell(): () => void {
         },
       },
       { key: "p", ctrl: true, run: () => editorPane.toggleMode() },
-      { key: "p", ctrl: true, shift: true, global: true, run: () => openPalette(commands) },
-      { key: "f", ctrl: true, run: () => openEditorSearch(editorPane.editor.view) },
-      { key: "f", ctrl: true, shift: true, run: () => openSearchPanel() },
-      { key: "h", ctrl: true, run: () => openReplacePanel(editorPane.editor.view) },
+      { key: "p", ctrl: true, shift: true, global: true, run: openPaletteLazy },
+      { key: "f", ctrl: true, run: () => openEditorFindLazy(false) },
+      { key: "f", ctrl: true, shift: true, run: openSearchLazy },
+      { key: "h", ctrl: true, run: () => openEditorFindLazy(true) },
       { key: "\\", ctrl: true, run: paletteDeps.toggleSidebar },
-      { key: ",", ctrl: true, run: () => openSettings(settingsDeps) },
-      { key: "/", ctrl: true, run: openShortcuts },
+      {
+        key: "i",
+        ctrl: true,
+        shift: true,
+        run: () => setState({ propertiesVisible: !state.propertiesVisible }),
+      },
+      { key: ",", ctrl: true, run: openSettingsLazy },
+      { key: "/", ctrl: true, run: openShortcutsLazy },
       { key: "tab", ctrl: true, run: () => actions.cycleTab(1) },
       { key: "tab", ctrl: true, shift: true, run: () => actions.cycleTab(-1) },
       { key: "1", ctrl: true, alt: true, run: () => actions.selectScope("all") },
@@ -202,6 +268,10 @@ function buildShell(): () => void {
     ],
     // Escape falls back to leaving preview mode, then to focusing the editor.
     () => {
+      if (state.propertiesVisible) {
+        setState({ propertiesVisible: false });
+        return true;
+      }
       const tab = state.tabs.find((t) => t.id === state.activeTabId);
       if (tab?.mode === "preview") {
         editorPane.setMode("edit");
@@ -217,14 +287,59 @@ function buildShell(): () => void {
 
   /* -------------------------------------------------------- backend events */
 
+  let suspended = document.hidden;
+  let pendingVaultRefresh = false;
+  let pendingVaultStructure = false;
+  let pendingExternalReconcile = false;
+
+  const resumeRefresh = () => {
+    suspended = false;
+    if (!pendingVaultRefresh) return;
+    const structure = pendingVaultStructure;
+    const external = pendingExternalReconcile;
+    pendingVaultRefresh = false;
+    pendingVaultStructure = false;
+    pendingExternalReconcile = false;
+    void actions.refreshVaultChange(structure);
+    if (external) void actions.reconcileTabs();
+  };
+
+  const onVisibility = () => {
+    suspended = document.hidden;
+    if (!suspended) resumeRefresh();
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+
   const unsubscribeBackend = [
-    api.onBackend("vault:changed", (payload) => {
-      const external = (payload as { external?: boolean } | undefined)?.external ?? true;
-      actions.refreshAllSoon();
+    api.onBackend("vault:delta", (payload) => {
+      const data = payload as import("./types").VaultDelta | undefined;
+      const external = data?.external ?? true;
+      const structure = data?.structure ?? false;
+      if (suspended || document.hidden) {
+        pendingVaultRefresh = true;
+        pendingVaultStructure ||= structure;
+        pendingExternalReconcile ||= external;
+        return;
+      }
+      if (data) actions.applyVaultDelta(data);
       if (external) void actions.reconcileTabs();
+    }),
+    api.onBackend("vault:sync-state", (payload) => {
+			if (!payload) return;
+			const next = payload as import("./types").IndexState;
+			const becameReady = !state.indexState.ready && next.ready;
+			setState({ indexState: next });
+			if (becameReady) {
+				void actions.refreshAll().then(() => {
+					if (state.tabs.length === 0 && state.notes[0]) {
+						void actions.openNote(state.notes[0], { focus: false });
+					}
+				});
+			}
     }),
     api.onBackend("tray:new-note", () => void actions.newNote()),
     api.onBackend("window:focus", () => {
+      resumeRefresh();
       editorPane.focus();
     }),
   ];
@@ -234,10 +349,26 @@ function buildShell(): () => void {
   unsubscribeBackend.push(
     api.onBackend("app:before-close", (payload) => {
       const quitting = (payload as { quitting?: boolean } | undefined)?.quitting ?? true;
+      if (!quitting) suspended = true;
       void (async () => {
+        if (hasManualUnsaved() || (!state.settings.autoSave && hasUnsaved())) {
+          if (!quitting) await api.showWindow();
+          const { confirm } = await import("./ui/modal");
+          const saveNow = await confirm({
+            title: "有未保存的编辑",
+            message: "自动保存已关闭。立即保存后再继续关闭，或返回应用继续保留这些未保存编辑。",
+            confirmLabel: "立即保存",
+            cancelLabel: "继续保留编辑",
+          });
+          if (!saveNow) {
+            await (quitting ? api.cancelClose() : api.showWindow());
+            return;
+          }
+        }
         const flushed = await actions.saveAll();
         if (flushed) {
           if (quitting) await api.confirmClose();
+          else if (!state.settings.autoSave) await api.windowMinimise();
           return;
         }
         // Losing the edit is worse than an unexpected window. Coming back from
@@ -250,27 +381,29 @@ function buildShell(): () => void {
 
   // A last-ditch flush for kill paths that skip the graceful close.
   const beforeUnload = () => {
-    void actions.saveAll();
+    void actions.saveAll({ includeManual: false });
   };
   window.addEventListener("beforeunload", beforeUnload);
 
   const onBlur = () => {
-    if (state.settings.autoSave) void actions.saveAll();
+    if (state.settings.autoSave) void actions.saveAll({ includeManual: false });
   };
   window.addEventListener("blur", onBlur);
 
   return () => {
     window.removeEventListener("beforeunload", beforeUnload);
     window.removeEventListener("blur", onBlur);
+    document.removeEventListener("visibilitychange", onVisibility);
     for (const unsubscribe of unsubscribeBackend) unsubscribe();
     uninstallShortcuts();
     unsubscribeLayout();
     unsubscribeTitle();
     unsubscribeZoom();
-    titlebar.destroy();
-    tabbar.destroy();
+    workspacebar.destroy();
     sidebar.destroy();
     notelist.destroy();
+    properties.destroy();
+    resizers.destroy();
     statusbar.destroy();
     editorPane.destroy();
     shell.remove();
@@ -286,6 +419,7 @@ function adoptPayload(payload: BootstrapPayload): void {
     version: payload.version,
     vaultPath: payload.vaultPath,
     stats: payload.stats,
+    indexState: payload.indexState,
     listView: payload.settings.listView,
     sortBy: payload.settings.sortBy,
   });
@@ -415,11 +549,14 @@ async function enterApp(payload: BootstrapPayload): Promise<void> {
   teardownView();
   teardownView = buildShell();
 
-  await actions.refreshAll();
+	const currentIndex = await api.indexState().catch(() => payload.indexState);
+	setState({ indexState: currentIndex });
+	if (currentIndex.ready) await actions.refreshAll();
+	else await actions.refreshTrash();
 
   // Reopen the most recently edited note so the app never starts on a blank
   // screen when there is obvious work in progress.
-  const first = state.notes[0];
+	const first = currentIndex.ready ? state.notes[0] : undefined;
   if (first) await actions.openNote(first, { focus: false });
 
   if (payload.error) notify.error(payload.error);

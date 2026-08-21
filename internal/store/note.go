@@ -29,7 +29,8 @@ type Meta struct {
 
 type Note struct {
 	Meta
-	Content string `json:"content"`
+	Content     string    `json:"content"`
+	FileModTime time.Time `json:"-"`
 }
 
 type Folder struct {

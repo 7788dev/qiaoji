@@ -8,7 +8,7 @@
 
 .welcome-screen {
   display: grid;
-  grid-template-rows: var(--titlebar-h) 1fr;
+  grid-template-rows: var(--workspacebar-h) 1fr;
   height: 100%;
   background: var(--bg-app);
 }
@@ -164,6 +164,54 @@
   margin-top: 2px;
   font-size: var(--text-xs);
   color: var(--fg-muted);
+}
+
+/* -------------------------------------------------------- diagnostics */
+
+.diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.diagnostics__note {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--fg-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.diagnostics__grid {
+  margin-top: 0;
+}
+
+.diagnostics__timings {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-soft);
+}
+
+.diagnostics__row {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  gap: var(--sp-3);
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--fg-secondary);
+  font-size: var(--text-sm);
+}
+
+.diagnostics__row strong {
+  color: var(--fg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.diagnostics__detail {
+  color: var(--fg-faint);
+  font-size: var(--text-xs);
 }
 
 /* ================================================================ shortcuts */
@@ -348,7 +396,7 @@
   height: 100%;
   width: 0;
   background: var(--accent);
-  transition: width 0.2s ease;
+  transition: width var(--dur-slow) var(--ease);
 }
 
 .about__update-actions {
@@ -369,4 +417,32 @@
   color: var(--fg-secondary);
   font-size: var(--text-base);
   line-height: 1.75;
+}
+
+.conflict-choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.conflict-choice__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.conflict-choice__item {
+  display: grid;
+  grid-template-columns: 112px 1fr;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--border-soft);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.conflict-choice__item strong {
+  color: var(--fg);
+  font-weight: 600;
 }

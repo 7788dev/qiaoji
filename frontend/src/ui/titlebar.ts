@@ -9,23 +9,30 @@ import {
   type DisposableHTMLElement,
 } from "../lib/dom";
 import { isDirty, state, subscribe } from "../store";
-import type { Tab } from "../types";
-import { showMenu } from "./menu";
+import type { SortBy, Tab } from "../types";
+import { anchorRect, showMenu, type MenuEntry } from "./menu";
 
-export interface TitlebarHandlers {
-  openPalette: () => void;
+export interface WorkspacebarHandlers {
+  newNote: () => void;
   openSearch: () => void;
-  openSettings: () => void;
+  toggleMode: () => void;
   toggleSidebar: () => void;
+  toggleList: () => void;
+  toggleProperties: () => void;
+  openOutline: (anchor: HTMLElement) => void;
+  openEditorActions: (anchor: HTMLElement) => void;
+  refreshPreview: () => void;
+  openExport: () => void;
+  openTags: () => void;
+  openTrash: () => void;
+  openSettings: () => void;
+  openPalette: () => void;
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+const TAB_BUDGET = 142;
+const OVERFLOW_BUDGET = 34;
 
-/**
- * The application mark. Vite fingerprints and inlines the import, so this is
- * one asset shared by the title bar, the About dialog and the fallback screen
- * rather than three hand-tuned copies.
- */
 export function brandMark(className: string): HTMLElement {
   return el("img", {
     class: className,
@@ -35,7 +42,6 @@ export function brandMark(className: string): HTMLElement {
   });
 }
 
-/** Window control glyphs, drawn to match the Windows 11 title bar metrics. */
 function windowGlyph(kind: "min" | "max" | "restore" | "close"): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.setAttribute("viewBox", "0 0 10 10");
@@ -60,10 +66,6 @@ function windowGlyph(kind: "min" | "max" | "restore" | "close"): SVGSVGElement {
   return svg;
 }
 
-/**
- * Minimise / maximise / close. Extracted so the welcome screen has them too;
- * a frameless window with no way to close it is a trap.
- */
 export function createWindowControls(): DisposableHTMLElement {
   let destroyed = false;
   const maxButton = el("button", {
@@ -71,9 +73,7 @@ export function createWindowControls(): DisposableHTMLElement {
     type: "button",
     title: "最大化",
     "aria-label": "最大化",
-    onclick: () => {
-      void api.windowToggleMaximise().then(paintMaxButton);
-    },
+    onclick: () => void api.windowToggleMaximise().then(paintMaxButton),
   });
 
   async function paintMaxButton(): Promise<void> {
@@ -87,7 +87,7 @@ export function createWindowControls(): DisposableHTMLElement {
 
   const root = el(
     "div",
-    { class: "titlebar__controls" },
+    { class: "workspacebar__controls" },
     el(
       "button",
       {
@@ -118,130 +118,162 @@ export function createWindowControls(): DisposableHTMLElement {
   });
 }
 
-export function createTitlebar(handlers: TitlebarHandlers): DisposableHTMLElement {
-  const controls = createWindowControls();
-  const bar = el(
-    "header",
-    { class: "titlebar" },
-    brandMark("titlebar__mark"),
-    el("span", { class: "titlebar__title" }, "巧记"),
-    el("div", { class: "spacer" }),
-    el(
-      "div",
-      { class: "titlebar__actions" },
-      iconButton("sidebar", "显示/隐藏侧边栏  Ctrl+\\", handlers.toggleSidebar),
-      iconButton("search", "搜索  Ctrl+F", handlers.openSearch),
-      iconButton("more", "命令面板  Ctrl+Shift+P", handlers.openPalette),
-      iconButton("settings", "设置", handlers.openSettings),
-    ),
-    controls,
-  );
-
-  // Double-clicking the drag region is the standard maximise gesture, and its
-  // absence in a frameless window is immediately noticeable.
-  const removeDoubleClick = on(bar, "dblclick", (ev) => {
-    const target = ev.target as HTMLElement;
-    if (target.closest(".titlebar__actions, .titlebar__controls")) return;
-    void api.windowToggleMaximise();
-  });
-
-  return disposableElement(bar, () => {
-    removeDoubleClick();
-    controls.destroy();
-  });
-}
-
 function iconButton(name: string, title: string, run: () => void): HTMLElement {
   return el(
     "button",
-    { class: "ibtn", type: "button", title, "aria-label": title, onclick: run },
+    {
+      class: "ibtn workspacebar__action",
+      type: "button",
+      title,
+      "aria-label": title,
+      onclick: run,
+    },
     icon(name, 15),
   );
 }
 
-/* ---------------------------------------------------------------- tab strip */
-
-export interface TabbarHandlers {
-  newNote: () => void;
-  toggleList: () => void;
-  toggleMode: () => void;
-  openExport: () => void;
-  openOutline: (anchor: HTMLElement) => void;
+interface TabNode {
+  root: HTMLElement;
+  dot: HTMLElement;
+  label: HTMLElement;
+  close: HTMLElement;
+  title: string;
 }
 
-export function createTabbar(handlers: TabbarHandlers): DisposableHTMLElement {
-  const strip = el("div", { class: "tabbar__strip", role: "tablist" });
+export function createWorkspacebar(handlers: WorkspacebarHandlers): DisposableHTMLElement {
+  const controls = createWindowControls();
+  const strip = el("div", { class: "workspacebar__strip", role: "tablist" });
+  const tabArea = el("div", { class: "workspacebar__tabs" }, strip);
+  const hiddenTabIds = new Set<string>();
 
-  const modeButton = el("button", {
-    class: "ibtn",
-    type: "button",
-    title: "预览  Ctrl+P",
-    "aria-label": "切换预览",
-    onclick: handlers.toggleMode,
-  });
+  const overflowButton = el(
+    "button",
+    {
+      class: "workspacebar__overflow",
+      type: "button",
+      title: "更多文件",
+      "aria-label": "更多文件",
+      hidden: true,
+    },
+    icon("more", 14),
+    el("span", { class: "workspacebar__overflow-count" }),
+  );
+  tabArea.appendChild(overflowButton);
 
-  const outlineButton = el("button", { class: "ibtn", type: "button", title: "大纲" });
-  outlineButton.appendChild(icon("list", 15));
-  outlineButton.addEventListener("click", () => handlers.openOutline(outlineButton));
+  const modeButton = iconButton("eye", "预览  Ctrl+P", handlers.toggleMode);
+  const propertiesButton = iconButton("info", "属性  Ctrl+Shift+I", handlers.toggleProperties);
+  const moreButton = iconButton("more", "更多操作", () => openMoreMenu());
 
   const bar = el(
-    "nav",
-    { class: "tabbar" },
-    strip,
-    el(
-      "button",
-      {
-        class: "tabbar__new",
-        type: "button",
-        title: "新建笔记  Ctrl+N",
-        "aria-label": "新建笔记",
-        onclick: handlers.newNote,
+    "header",
+    {
+      class: "workspacebar",
+      ondblclick: (ev: MouseEvent) => {
+        // Match a native title bar: double-clicking brand or unused tab-strip
+        // space toggles maximise, while tabs and toolbar buttons keep their
+        // own double-click behaviour.
+        const target = ev.target as HTMLElement;
+        if (target.closest("button, input, select, textarea, a, .workspacebar__strip")) return;
+        void api.windowToggleMaximise();
       },
-      icon("plus", 15),
-    ),
-    el("div", { class: "spacer" }),
+    },
     el(
       "div",
-      { class: "tabbar__right" },
-      el(
-        "button",
-        {
-          class: "ibtn",
-          type: "button",
-          title: "显示/隐藏笔记列表",
-          "aria-label": "显示或隐藏笔记列表",
-          onclick: handlers.toggleList,
-        },
-        icon("columns", 15),
-      ),
-      outlineButton,
-      modeButton,
-      el(
-        "button",
-        {
-          class: "ibtn",
-          type: "button",
-          title: "导出  Ctrl+Shift+E",
-          "aria-label": "导出",
-          onclick: handlers.openExport,
-        },
-        icon("download", 15),
-      ),
+      { class: "workspacebar__brand" },
+      brandMark("workspacebar__mark"),
+      el("span", { class: "workspacebar__title" }, "巧记"),
     ),
+    tabArea,
+    el(
+      "div",
+      { class: "workspacebar__actions" },
+      iconButton("search", "全局搜索  Ctrl+Shift+F", handlers.openSearch),
+      modeButton,
+      propertiesButton,
+      moreButton,
+    ),
+    controls,
   );
 
-  /**
-   * One tab's nodes, kept so a repaint writes text instead of rebuilding.
-   *
-   * Every tab used to be recreated — five listeners and two inline SVGs each —
-   * whenever anything about the tabs changed, which included every keystroke.
-   */
-  interface TabNode {
-    root: HTMLElement;
-    dot: HTMLElement;
-    label: HTMLElement;
-    close: HTMLElement;
-    title: string;
+  function openMoreMenu(): void {
+    const sortEntries: MenuEntry[] = [
+      ["updated", "修改时间"],
+      ["created", "创建时间"],
+      ["title", "标题"],
+    ].map(([value, label]) => ({
+      label,
+      icon: state.sortBy === value ? "check" : undefined,
+      run: () => actions.setSortBy(value as SortBy),
+    }));
+
+    const tab = state.tabs.find((entry) => entry.id === state.activeTabId);
+    const rect = anchorRect(moreButton);
+    showMenu(
+      [
+        { label: "新建笔记", icon: "plus", shortcut: "Ctrl+N", run: handlers.newNote },
+        {
+          label: "编辑操作",
+          icon: "pencil",
+          disabled: !tab,
+          run: () => handlers.openEditorActions(moreButton),
+        },
+        {
+          label: "文章大纲",
+          icon: "list",
+          disabled: !tab,
+          run: () => handlers.openOutline(moreButton),
+        },
+        {
+          label: "刷新预览",
+          icon: "refresh",
+          disabled: !tab || tab.mode !== "preview",
+          run: handlers.refreshPreview,
+        },
+        "separator",
+        {
+          label: state.sidebarVisible ? "隐藏侧栏" : "显示侧栏",
+          icon: "sidebar",
+          shortcut: "Ctrl+\\",
+          run: handlers.toggleSidebar,
+        },
+        {
+          label: state.listVisible ? "隐藏笔记列表" : "显示笔记列表",
+          icon: "columns",
+          run: handlers.toggleList,
+        },
+        {
+          label: state.propertiesVisible ? "隐藏属性" : "显示属性",
+          icon: "info",
+          shortcut: "Ctrl+Shift+I",
+          run: handlers.toggleProperties,
+        },
+        {
+          label: state.listView === "list" ? "网格视图" : "列表视图",
+          icon: state.listView === "list" ? "grid" : "list",
+          run: () => actions.setListView(state.listView === "list" ? "grid" : "list"),
+        },
+        { label: "排序", icon: "sort", disabled: state.searchHits !== null, children: sortEntries },
+        "separator",
+        { label: "标签管理", icon: "tag", run: handlers.openTags },
+        { label: "回收站", icon: "trash", run: handlers.openTrash },
+        {
+          label: "导出",
+          icon: "download",
+          shortcut: "Ctrl+Shift+E",
+          disabled: !tab,
+          run: handlers.openExport,
+        },
+        "separator",
+        {
+          label: "命令面板",
+          icon: "keyboard",
+          shortcut: "Ctrl+Shift+P",
+          run: handlers.openPalette,
+        },
+        { label: "设置", icon: "settings", shortcut: "Ctrl+,", run: handlers.openSettings },
+      ],
+      { x: rect.right, y: rect.bottom + 5 },
+    );
   }
 
   const tabNodes = new Map<string, TabNode>();
@@ -262,7 +294,6 @@ export function createTabbar(handlers: TabbarHandlers): DisposableHTMLElement {
       },
       icon("close", 11),
     );
-
     const root = el(
       "div",
       {
@@ -277,7 +308,6 @@ export function createTabbar(handlers: TabbarHandlers): DisposableHTMLElement {
           }
         },
         onauxclick: (ev: MouseEvent) => {
-          // Middle-click closes, matching every tabbed interface.
           if (ev.button === 1) {
             ev.preventDefault();
             void actions.closeTab(tab.id);
@@ -299,9 +329,7 @@ export function createTabbar(handlers: TabbarHandlers): DisposableHTMLElement {
                 label: "在资源管理器中显示",
                 icon: "folderOpen",
                 run: () => {
-                  // Looked up now, not captured: saving a note whose heading
-                  // changed renames the file, and this node outlives that.
-                  const current = state.tabs.find((t) => t.id === tab.id);
+                  const current = state.tabs.find((entry) => entry.id === tab.id);
                   if (current) void api.revealInExplorer(current.path);
                 },
               },
@@ -314,11 +342,9 @@ export function createTabbar(handlers: TabbarHandlers): DisposableHTMLElement {
       label,
       close,
     );
-
     return { root, dot, label, close, title: "" };
   }
 
-  /** Writes one tab's changeable parts, skipping the text when it is unchanged. */
   function paintTab(tab: Tab, node: TabNode): void {
     const active = tab.id === state.activeTabId;
     node.root.classList.toggle("is-active", active);
@@ -335,12 +361,39 @@ export function createTabbar(handlers: TabbarHandlers): DisposableHTMLElement {
     node.close.setAttribute("aria-label", `关闭 ${title}`);
   }
 
-  let lastActiveId: string | null = null;
+  function visibleTabIds(capacity: number): Set<string> {
+    const tabs = state.tabs;
+    if (tabs.length <= capacity) return new Set(tabs.map((tab) => tab.id));
+    const active = Math.max(0, tabs.findIndex((tab) => tab.id === state.activeTabId));
+    const start = Math.max(
+      0,
+      Math.min(active - Math.floor((capacity - 1) / 2), tabs.length - capacity),
+    );
+    return new Set(tabs.slice(start, start + capacity).map((tab) => tab.id));
+  }
 
-  /** Reconciles the strip with the open tabs, reusing every node it can. */
+  function layoutTabs(): void {
+    const width = tabArea.clientWidth;
+    const needsOverflow = state.tabs.length * TAB_BUDGET > width;
+    const capacity = Math.max(
+      1,
+      Math.floor((width - (needsOverflow ? OVERFLOW_BUDGET : 0)) / TAB_BUDGET),
+    );
+    const visible = visibleTabIds(capacity);
+    hiddenTabIds.clear();
+    for (const tab of state.tabs) {
+      const hidden = !visible.has(tab.id);
+      tabNodes.get(tab.id)?.root.toggleAttribute("hidden", hidden);
+      if (hidden) hiddenTabIds.add(tab.id);
+    }
+    overflowButton.hidden = hiddenTabIds.size === 0;
+    const count = overflowButton.querySelector<HTMLElement>(".workspacebar__overflow-count");
+    if (count) count.textContent = hiddenTabIds.size ? String(hiddenTabIds.size) : "";
+  }
+
   function syncTabs(): void {
     for (const [id, node] of tabNodes) {
-      if (state.tabs.some((t) => t.id === id)) continue;
+      if (state.tabs.some((tab) => tab.id === id)) continue;
       node.root.remove();
       tabNodes.delete(id);
     }
@@ -360,35 +413,56 @@ export function createTabbar(handlers: TabbarHandlers): DisposableHTMLElement {
       paintTab(tab, node);
     }
 
-    const tab = state.tabs.find((t) => t.id === state.activeTabId);
-    if (tab && tab.id !== lastActiveId) {
-      tabNodes.get(tab.id)?.root.scrollIntoView({ block: "nearest", inline: "nearest" });
-    }
-    lastActiveId = tab?.id ?? null;
-
-    const previewing = tab?.mode === "preview";
+    const active = state.tabs.find((tab) => tab.id === state.activeTabId);
+    const previewing = active?.mode === "preview";
     modeButton.replaceChildren(icon(previewing ? "pencil" : "eye", 15));
-    modeButton.title = previewing ? "编辑  Ctrl+P" : "预览  Ctrl+P";
-    modeButton.classList.toggle("is-active", previewing);
-    modeButton.disabled = !tab;
-    outlineButton.disabled = !tab;
+    modeButton.title = previewing ? "返回编辑  Ctrl+P" : "预览  Ctrl+P";
+    modeButton.setAttribute("aria-label", modeButton.title);
+    modeButton.classList.toggle("is-active", Boolean(previewing));
+    modeButton.toggleAttribute("disabled", !active);
+    propertiesButton.classList.toggle("is-active", state.propertiesVisible);
+    propertiesButton.setAttribute("aria-pressed", state.propertiesVisible ? "true" : "false");
+    requestAnimationFrame(layoutTabs);
   }
 
-  /** Typing only ever changes the tab being typed into. */
   function paintActiveTab(): void {
-    const tab = state.tabs.find((t) => t.id === state.activeTabId);
+    const tab = state.tabs.find((entry) => entry.id === state.activeTabId);
     if (!tab) return;
     const node = tabNodes.get(tab.id);
     if (node) paintTab(tab, node);
   }
 
-  const unsubscribeTabs = subscribe(["tabs", "activeTabId"], syncTabs);
+  overflowButton.addEventListener("click", () => {
+    const rect = anchorRect(overflowButton);
+    const hidden = state.tabs.filter((tab) => hiddenTabIds.has(tab.id));
+    showMenu(
+      hidden.map((tab) => ({
+        label: actions.tabTitle(tab),
+        icon: tab.conflict ? "alert" : isDirty(tab) ? "edit" : "note",
+        run: () => actions.activateTab(tab.id),
+      })),
+      { x: rect.left, y: rect.bottom + 5 },
+    );
+  });
+
+  const removeDoubleClick = on(bar, "dblclick", (ev) => {
+    const target = ev.target as HTMLElement;
+    if (target.closest("button, .tab")) return;
+    void api.windowToggleMaximise();
+  });
+  const observer = new ResizeObserver(layoutTabs);
+  observer.observe(tabArea);
+
+  const unsubscribeTabs = subscribe(["tabs", "activeTabId", "propertiesVisible"], syncTabs);
   const unsubscribeDoc = subscribe(["docRevision"], paintActiveTab);
   syncTabs();
 
   return disposableElement(bar, () => {
     unsubscribeTabs();
     unsubscribeDoc();
+    observer.disconnect();
+    removeDoubleClick();
     tabNodes.clear();
+    controls.destroy();
   });
 }

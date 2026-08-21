@@ -16,13 +16,34 @@ export function openTrashDialog(): void {
       class: "btn btn--danger",
       type: "button",
       onclick: async () => {
-        const ok = await confirm({
+        const count = state.trash.length;
+        const first = await confirm({
           title: "清空回收站",
-          message: `将永久删除 ${state.trash.length} 篇笔记，此操作无法撤销。`,
-          confirmLabel: "永久清空",
+          message: `将永久删除回收站中的 ${count} 个条目，此操作无法撤销。`,
+          confirmLabel: "继续",
           danger: true,
         });
-        if (ok) await actions.emptyTrash();
+        if (!first) return;
+
+        if (count >= 10) {
+          const phrase = await prompt({
+            title: "输入确认",
+            label: "请输入“清空”以确认永久删除",
+            placeholder: "清空",
+            confirmLabel: "永久清空",
+            validate: (value) => (value === "清空" ? null : "请输入“清空”"),
+          });
+          if (!phrase) return;
+        } else {
+          const second = await confirm({
+            title: "再次确认永久清空",
+            message: "删除后无法从巧记恢复。确定要继续吗？",
+            confirmLabel: "永久清空",
+            danger: true,
+          });
+          if (!second) return;
+        }
+        await actions.emptyTrash();
       },
     },
     icon("trash", 14),
@@ -63,7 +84,7 @@ export function openTagsDialog(): void {
           el(
             "div",
             { class: "empty__hint" },
-            "在状态栏点击标签图标，就能给当前笔记添加标签。",
+            "在编辑区右键或打开“更多 → 编辑操作”，即可给当前笔记添加标签。",
           ),
         ),
       );

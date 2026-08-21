@@ -28,6 +28,8 @@ export function DeleteNote(arg1:string):Promise<store.TrashItem>;
 
 export function DeleteTag(arg1:string):Promise<number>;
 
+export function Diagnostics():Promise<main.Diagnostics>;
+
 export function DuplicateNote(arg1:string):Promise<store.Meta>;
 
 export function EmptyTrash():Promise<void>;
@@ -38,9 +40,13 @@ export function GetNote(arg1:string,arg2:string):Promise<store.Note>;
 
 export function GetSettings():Promise<config.Settings>;
 
+export function IndexState():Promise<main.IndexState>;
+
 export function ListFolders():Promise<Array<store.Folder>>;
 
 export function ListNotes(arg1:index.Query):Promise<Array<store.Meta>>;
+
+export function ListNotesPage(arg1:main.NotePageRequest):Promise<main.NotePage>;
 
 export function ListTags():Promise<Array<store.Tag>>;
 
@@ -58,7 +64,7 @@ export function PurgeTrashItem(arg1:string):Promise<void>;
 
 export function RebuildIndex():Promise<main.Stats>;
 
-export function RenameFolder(arg1:string,arg2:string):Promise<void>;
+export function RenameFolder(arg1:string,arg2:string):Promise<string>;
 
 export function RenameNote(arg1:string,arg2:string):Promise<store.Meta>;
 

@@ -1,8 +1,8 @@
-/* The application shell: title bar, tab strip, three columns, status bar. */
+/* The application shell: one workspace bar, three columns and a quiet footer. */
 
 .shell {
   display: grid;
-  grid-template-rows: var(--titlebar-h) var(--tabbar-h) 1fr var(--statusbar-h);
+  grid-template-rows: var(--workspacebar-h) 1fr var(--statusbar-h);
   height: 100%;
   background: var(--bg-editor);
   overflow: hidden;
@@ -14,24 +14,33 @@
 }
 
 .shell.is-zen {
-  grid-template-rows: var(--titlebar-h) 0 1fr var(--statusbar-h);
+  grid-template-rows: var(--workspacebar-h) 1fr var(--statusbar-h);
 }
 
-/* ================================================================ titlebar */
+/* ============================================================= workspacebar */
 
+.workspacebar,
 .titlebar {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  padding-left: var(--sp-4);
+  min-width: 0;
+  gap: var(--sp-3);
+  padding-left: var(--sp-3);
   background: var(--bg-chrome);
-  border-bottom: 1px solid var(--border-soft);
-  /* Wails turns this attribute into a native window drag region. */
+  border-bottom: 1px solid var(--border);
   --wails-draggable: drag;
 }
 
-/* The brand mark is the app icon, plate and all. It already carries its own
-   rounded plate, so no background or radius is applied here. */
+.workspacebar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 94px;
+  flex: none;
+  min-width: 0;
+}
+
+.workspacebar__mark,
 .titlebar__mark {
   width: 20px;
   height: 20px;
@@ -41,24 +50,60 @@
   -webkit-user-drag: none;
 }
 
+.workspacebar__title,
 .titlebar__title {
   font-size: var(--text-sm);
-  font-weight: 550;
-  color: var(--fg-secondary);
-  letter-spacing: 0.01em;
+  font-weight: 620;
+  color: var(--fg);
+  letter-spacing: 0.02em;
 }
 
-.titlebar__actions {
+.workspacebar__tabs {
   display: flex;
   align-items: center;
-  gap: 2px;
+  flex: 1;
+  min-width: 74px;
+  height: 100%;
+  gap: var(--sp-1);
+  overflow: hidden;
+  /* Empty tab-strip space behaves like a native title bar. Interactive tab
+     nodes opt out below, leaving a generous drag surface instead of the tiny
+     brand-only target that made the window appear locked in place. */
+  --wails-draggable: drag;
+}
+
+.workspacebar__strip {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--sp-1);
+  overflow: hidden;
   --wails-draggable: no-drag;
 }
 
-.titlebar__controls {
+.workspacebar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: none;
+  --wails-draggable: no-drag;
+}
+
+.workspacebar__action {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-md);
+}
+
+.workspacebar__action.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.workspacebar__controls {
   display: flex;
   align-items: stretch;
-  margin-left: var(--sp-2);
+  flex: none;
   --wails-draggable: no-drag;
 }
 
@@ -66,7 +111,7 @@
   display: grid;
   place-items: center;
   width: 44px;
-  height: var(--titlebar-h);
+  height: var(--workspacebar-h);
   color: var(--fg-secondary);
   transition: background-color var(--dur-fast) var(--ease),
     color var(--dur-fast) var(--ease);
@@ -82,42 +127,17 @@
   color: #fff;
 }
 
-/* ================================================================ tabs */
-
-.tabbar {
-  display: flex;
-  align-items: stretch;
-  gap: 1px;
-  padding: 0 var(--sp-3);
-  background: var(--bg-chrome);
-  border-bottom: 1px solid var(--border);
-  overflow: hidden;
-  --wails-draggable: drag;
-}
-
-.tabbar__strip {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  --wails-draggable: no-drag;
-}
-
-.tabbar__strip::-webkit-scrollbar {
-  display: none;
-}
-
 .tab {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  max-width: 190px;
-  min-width: 96px;
-  padding: 0 var(--sp-2) 0 var(--sp-4);
-  border-radius: var(--r-md) var(--r-md) 0 0;
+  width: 138px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  border-radius: var(--r-md);
   color: var(--fg-secondary);
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   white-space: nowrap;
   position: relative;
   transition: background-color var(--dur-fast) var(--ease),
@@ -130,31 +150,36 @@
 }
 
 .tab.is-active {
-  background: var(--bg-editor);
+  background: var(--selected);
   color: var(--fg);
   font-weight: 550;
 }
 
-/* A hairline that ties the active tab to the editor surface below it. */
 .tab.is-active::after {
   content: "";
   position: absolute;
-  inset: auto 0 -1px 0;
-  height: 1px;
-  background: var(--bg-editor);
+  left: 12px;
+  right: 12px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  opacity: 0.82;
 }
 
 .tab__label {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .tab__dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   flex: none;
   border-radius: var(--r-full);
-  background: var(--fg-muted);
+  background: var(--warn);
 }
 
 .tab__dot.is-conflict {
@@ -185,14 +210,15 @@
   color: var(--fg);
 }
 
-.tabbar__new {
+.workspacebar__overflow {
   display: grid;
+  grid-template-columns: auto auto;
   place-items: center;
-  width: 28px;
-  align-self: center;
-  height: 26px;
+  gap: 2px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 var(--sp-2);
   flex: none;
-  margin-left: 2px;
   border-radius: var(--r-md);
   color: var(--fg-muted);
   --wails-draggable: no-drag;
@@ -200,17 +226,20 @@
     color var(--dur-fast) var(--ease);
 }
 
-.tabbar__new:hover {
+.workspacebar__overflow:hover {
   background: var(--hover);
   color: var(--fg);
 }
 
-.tabbar__right {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding-left: var(--sp-3);
-  --wails-draggable: no-drag;
+.workspacebar__overflow-count {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+@container shell (max-width: 980px) {
+  .workspacebar__brand {
+    width: 72px;
+  }
 }
 
 /* ================================================================ body */
@@ -219,7 +248,67 @@
   display: grid;
   grid-template-columns: var(--sidebar-w) var(--list-w) 1fr;
   min-height: 0;
+  position: relative;
   background: var(--bg-editor);
+}
+
+.panel-resizers {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+}
+
+.panel-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  pointer-events: auto;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.panel-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background-color var(--dur-fast) var(--ease);
+}
+
+.panel-resizer:hover::after,
+.panel-resizer:focus-visible::after,
+.body.is-resizing-panels .panel-resizer::after {
+  background: var(--accent);
+}
+
+.panel-resizer--sidebar {
+  left: calc(var(--sidebar-w) - 4px);
+}
+
+.panel-resizer--list {
+  left: calc(var(--sidebar-w) + var(--list-w) - 4px);
+}
+
+.body.is-sidebar-hidden .panel-resizer--sidebar,
+.body.is-list-hidden .panel-resizer--list,
+.body.is-grid .panel-resizer--list {
+  display: none;
+}
+
+.body.is-sidebar-hidden .panel-resizer--list {
+  left: calc(var(--list-w) - 4px);
+}
+
+.body.is-resizing-panels,
+.body.is-resizing-panels * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .body.is-sidebar-hidden {
@@ -243,14 +332,6 @@
 
 .body.is-grid.is-sidebar-hidden {
   grid-template-columns: 0 1fr 0;
-}
-
-.body.is-grid .pane {
-  display: none;
-}
-
-.body.is-grid .notelist {
-  border-right: 0;
 }
 
 /* A collapsed column is zero-width but its buttons and rows are still in the
@@ -288,6 +369,10 @@
 
   .body:not(.is-grid) > .notelist {
     visibility: hidden;
+  }
+
+  .body:not(.is-grid) .panel-resizer--list {
+    display: none;
   }
 }
 
@@ -331,6 +416,35 @@
   color: inherit;
   font: inherit;
   letter-spacing: inherit;
+}
+
+.nav-group__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: 0;
+}
+
+.nav-group__chevron {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  flex: none;
+}
+
+.nav-group__meta {
+  margin-left: auto;
+  color: var(--fg-faint);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.nav-empty {
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--fg-faint);
+  font-size: var(--text-xs);
 }
 
 .nav-group__add {
@@ -428,6 +542,19 @@
   border-top: 1px solid var(--border-soft);
 }
 
+.sidebar__extension {
+  margin-bottom: var(--sp-2);
+}
+
+.sidebar__extension-badge {
+  padding: 1px 5px;
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 650;
+}
+
 /* ================================================================ note list */
 
 .notelist {
@@ -465,6 +592,12 @@
   flex: 1;
   min-height: 0;
   position: relative;
+}
+
+.notelist__more {
+	display: flex;
+	justify-content: center;
+	padding: var(--sp-3);
 }
 
 /* The virtual list keeps a sized spacer and absolutely positions only the
@@ -658,22 +791,193 @@
   background: var(--bg-editor);
 }
 
-.pane__toolbar {
+.editor-area {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  container-name: editor-area;
+  container-type: inline-size;
+  background: var(--bg-editor);
+}
+
+.editor-area > .pane {
+  flex: 1;
+}
+
+.property-drawer {
+  width: 276px;
+  flex: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+}
+
+.property-drawer[hidden] {
+  display: none;
+}
+
+.property-drawer__head {
+  height: 42px;
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 1px;
-  height: 40px;
-  flex: none;
-  padding: 0 var(--sp-3);
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4) 0 var(--sp-5);
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--fg-secondary);
+  font-size: var(--text-base);
+}
+
+.property-drawer__head strong {
+  flex: 1;
+}
+
+.property-drawer__content {
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-5);
+}
+
+.property-drawer__empty {
+  min-height: 220px;
+  padding: var(--sp-5);
+}
+
+.property-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: 0 0 var(--sp-5);
+  margin: 0 0 var(--sp-5);
   border-bottom: 1px solid var(--border-soft);
 }
 
-.toolbar-sep {
-  width: 1px;
-  height: 16px;
+.property-section:last-child {
+  border-bottom: 0;
+}
+
+.property-section__title {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.property-toggle {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+}
+
+.property-toggle:hover,
+.property-toggle.is-active {
+  background: var(--active);
+  color: var(--fg);
+}
+
+.property-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.property-tags:empty {
+  display: none;
+}
+
+.property-tags__input {
+  height: 30px;
+  font-size: var(--text-sm);
+}
+
+.property-path {
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+  color: var(--fg-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.property-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.property-actions .btn {
+  flex: 1;
+  padding: 0 var(--sp-3);
+}
+
+.property-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  color: var(--fg-secondary);
+  font-size: var(--text-sm);
+}
+
+.property-row__label {
+  width: 38px;
   flex: none;
-  margin: 0 var(--sp-2);
-  background: var(--border);
+  color: var(--fg-muted);
+}
+
+.property-row__value {
+  min-width: 0;
+  flex: 1;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.property-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-5);
+  border-radius: var(--r-md);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.property-alert .spacer {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.property-alert .btn {
+  height: 28px;
+  padding: 0 var(--sp-3);
+  flex: none;
+}
+
+@container editor-area (max-width: 720px) {
+  .property-drawer {
+    position: absolute;
+    z-index: 20;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(290px, 82%);
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.12);
+  }
 }
 
 .pane__stage {
@@ -706,10 +1010,10 @@
 .statusbar {
   display: flex;
   align-items: center;
-  gap: var(--sp-4);
+  gap: var(--sp-3);
   padding: 0 var(--sp-4);
   background: var(--bg-chrome);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-soft);
   color: var(--fg-muted);
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
@@ -723,7 +1027,7 @@
 }
 
 button.statusbar__item {
-  height: 20px;
+  height: 22px;
   padding: 0 var(--sp-3);
   border-radius: var(--r-sm);
   color: inherit;
@@ -754,6 +1058,10 @@ button.statusbar__item.is-active {
 
 .statusbar__save.is-saved {
   color: var(--success);
+}
+
+.statusbar__save:disabled {
+  cursor: default;
 }
 
 /* ================================================================ empty */

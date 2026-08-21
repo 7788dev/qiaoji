@@ -10,9 +10,12 @@ import * as Go from "../wailsjs/go/main/App";
 import { EventsOn, LogError } from "../wailsjs/runtime/runtime";
 import type {
   BootstrapPayload,
+  Diagnostics,
   ExportRequest,
   Folder,
-  ListQuery,
+  IndexState,
+  NotePage,
+  NotePageRequest,
   Note,
   NoteMeta,
   Restored,
@@ -51,6 +54,9 @@ export const selectVaultDir = () => call(() => Go.SelectVaultDir(), "选择文�
 
 export const stats = () => call(() => Go.Stats(), "统计") as Promise<Stats>;
 
+export const diagnostics = () =>
+  call(() => Go.Diagnostics(), "性能诊断") as Promise<Diagnostics>;
+
 /** Folders, tags and totals in one call, so a refresh walks the vault once. */
 export const sidebar = () => call(() => Go.Sidebar(), "读取侧边栏") as Promise<SidebarData>;
 
@@ -58,8 +64,13 @@ export const rebuildIndex = () => call(() => Go.RebuildIndex(), "重建索引") 
 
 /* ---------------------------------------------------------------- notes */
 
-export const listNotes = (query: ListQuery) =>
-  call(() => Go.ListNotes(query as never), "读取笔记列表") as Promise<NoteMeta[]>;
+export const listNotesPage = (query: NotePageRequest) =>
+  call(() => Go.ListNotesPage(query as never), "读取笔记列表") as Promise<NotePage>;
+
+/** Compatibility shim for focused tests and older optional callers. */
+export const listNotes = async (query: NotePageRequest) => (await listNotesPage(query)).items;
+
+export const indexState = () => call(() => Go.IndexState(), "读取索引状态") as Promise<IndexState>;
 
 export const listFolders = () => call(() => Go.ListFolders(), "读取文件夹") as Promise<Folder[]>;
 
@@ -84,6 +95,28 @@ export const saveNote = (
 
 export const saveAsset = (notePath: string, filename: string, data: number[]) =>
   call(() => Go.SaveAsset(notePath, filename, data), "保存图片");
+
+/** Streams the browser File directly to the AssetServer without expanding it into number[]. */
+export const uploadAsset = (notePath: string, file: File) =>
+  call(async () => {
+    const params = new URLSearchParams({
+      note: notePath,
+      filename: file.name || "image",
+    });
+    const response = await fetch(`/__qiaoji_asset?${params}`, {
+      method: "POST",
+      headers: file.type ? { "Content-Type": file.type } : undefined,
+      body: file,
+    });
+    const payload = (await response.json().catch(() => ({}))) as {
+      path?: string;
+      error?: string;
+    };
+    if (!response.ok || !payload.path) {
+      throw new Error(payload.error || `图片上传失败（${response.status}）`);
+    }
+    return payload.path;
+  }, "保存图片");
 
 export const renameNote = (path: string, title: string) =>
   call(() => Go.RenameNote(path, title), "重命名笔记") as Promise<NoteMeta>;
@@ -120,7 +153,7 @@ export const createFolder = (name: string) =>
   call(() => Go.CreateFolder(name), "新建文件夹") as Promise<Folder>;
 
 export const renameFolder = (path: string, name: string) =>
-  call(() => Go.RenameFolder(path, name), "重命名文件夹");
+  call(() => Go.RenameFolder(path, name), "重命名文件夹") as Promise<string>;
 
 export const deleteFolder = (path: string) =>
   call(() => Go.DeleteFolder(path), "删除文件夹") as Promise<TrashItem>;
@@ -192,12 +225,13 @@ export const showWindow = () => Go.ShowWindow();
 /* ---------------------------------------------------------------- events */
 
 export type BackendEvent =
-  | "vault:changed"
+  | "vault:delta"
+  | "vault:sync-state"
   | "window:focus"
   | "tray:new-note"
   | "app:before-close"
   | "update:progress";
 
 export function onBackend(event: BackendEvent, handler: (data?: unknown) => void): () => void {
-  return EventsOn(event, handler);
+  return EventsOn(event, (payload: unknown) => handler(payload));
 }

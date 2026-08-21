@@ -1,6 +1,6 @@
 /**
- * Every user-visible operation lives here so the toolbar, context menus,
- * command palette and keyboard shortcuts all drive the same code path. A
+ * Every user-visible operation lives here so on-demand menus, the command
+ * palette and keyboard shortcuts all drive the same code path. A
  * command that behaves differently depending on how it was invoked is a bug
  * this layout makes hard to write.
  */
@@ -8,6 +8,7 @@
 import * as api from "./api";
 import { debounce, el } from "./lib/dom";
 import { titleOf } from "./lib/markdown";
+import { recordFrontendTiming } from "./lib/perf";
 import {
   activeTab,
   isDirty,
@@ -17,7 +18,7 @@ import {
   tabByPath,
 } from "./store";
 import type {
-  ListQuery,
+  NotePageRequest,
   Note,
   NoteMeta,
   Scope,
@@ -25,8 +26,10 @@ import type {
   SortBy,
   Stats as AppStats,
   Tab,
+  TabConflict,
+  VaultDelta,
 } from "./types";
-import { openModal, type ModalHandle } from "./ui/modal";
+import { confirm, openModal, type ModalHandle } from "./ui/modal";
 import { notify, reportError } from "./ui/toast";
 
 /* ---------------------------------------------------------------- editor hook */
@@ -56,25 +59,78 @@ export function currentMarkdown(): string {
 
 /* ---------------------------------------------------------------- loading */
 
-function query(): ListQuery {
+function query(cursor = ""): NotePageRequest {
   return {
     scope: state.scope === "trash" ? "all" : state.scope,
     value: state.scopeValue,
     sortBy: state.sortBy,
-    limit: 0,
+    limit: 200,
+    cursor,
   };
 }
 
+let listGeneration = 0;
+
 export async function refreshList(): Promise<void> {
   if (!state.ready) return;
-  setState({ loadingList: true });
+	if (!state.indexState.ready) {
+		setState({ loadingList: true, listError: "" });
+		return;
+	}
+	const generation = ++listGeneration;
+  const startedAt = performance.now();
+  setState({ loadingList: true, loadingMore: false, listError: "", nextCursor: "" });
   try {
-    const notes = await api.listNotes(query());
-    setState({ notes, loadingList: false });
+		const page = await api.listNotesPage(query());
+		if (generation !== listGeneration) return;
+		setState({
+			notes: page.items ?? [],
+			noteTotal: page.total ?? 0,
+			nextCursor: page.nextCursor ?? "",
+			loadingList: false,
+		});
+    recordFrontendTiming("listRefreshMs", startedAt);
   } catch (err) {
-    setState({ loadingList: false });
+		if (generation !== listGeneration) return;
+		setState({ loadingList: false, listError: errorMessage(err) });
     reportError("读取笔记列表", err);
   }
+}
+
+export async function loadNextPage(): Promise<void> {
+	if (
+		!state.ready || !state.indexState.ready || state.loadingList || state.loadingMore || !state.nextCursor ||
+		state.searchHits !== null || state.scope === "trash"
+	) {
+		return;
+	}
+	const generation = listGeneration;
+	const cursor = state.nextCursor;
+	setState({ loadingMore: true, listError: "" });
+	try {
+		const page = await api.listNotesPage(query(cursor));
+		if (generation !== listGeneration || cursor !== state.nextCursor) return;
+		const known = new Set(state.notes.map((note) => note.id || note.path));
+		const appended = (page.items ?? []).filter((note) => !known.has(note.id || note.path));
+		setState({
+			notes: appended.length ? [...state.notes, ...appended] : state.notes,
+			noteTotal: page.total ?? state.noteTotal,
+			nextCursor: page.nextCursor ?? "",
+			loadingMore: false,
+		});
+	} catch (err) {
+		if (generation !== listGeneration) return;
+		setState({ loadingMore: false, listError: errorMessage(err) });
+	}
+}
+
+export function retryListLoad(): void {
+	if (state.notes.length === 0) void refreshList();
+	else void loadNextPage();
+}
+
+function errorMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
 }
 
 export async function refreshSidebar(): Promise<void> {
@@ -126,14 +182,101 @@ export async function refreshAll(): Promise<void> {
   await Promise.all([refreshList(), refreshSidebar(), refreshTrash()]);
 }
 
-/** Debounced so a burst of filesystem events costs one round of queries. */
-export const refreshAllSoon = debounce(() => {
-  void refreshAll();
+/** Refreshes only surfaces affected by a normal vault filesystem event. */
+export async function refreshVaultChange(structure = false): Promise<void> {
+  await Promise.all([
+    refreshList(),
+    structure ? refreshSidebar() : Promise.resolve(),
+    state.scope === "trash" ? refreshTrash() : Promise.resolve(),
+  ]);
+}
+
+function matchesScope(note: NoteMeta): boolean {
+	switch (state.scope) {
+		case "favorites": return note.favorite;
+		case "folder": return note.folder === state.scopeValue || note.folder.startsWith(`${state.scopeValue}/`);
+		case "tag": return note.tags?.includes(state.scopeValue) ?? false;
+		case "untagged": return !note.tags || note.tags.length === 0;
+		case "trash": return false;
+		default: return true;
+	}
+}
+
+function sortLoadedNotes(notes: NoteMeta[]): void {
+	if (state.sortBy === "title") {
+		notes.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }) || a.id.localeCompare(b.id));
+		return;
+	}
+	const key = state.sortBy === "created" ? "created" : "updated";
+	notes.sort((a, b) => Date.parse(b[key]) - Date.parse(a[key]) || a.id.localeCompare(b.id));
+}
+
+/** Applies a path-level backend delta without replacing the whole list. */
+export function applyVaultDelta(delta: VaultDelta): void {
+	if (delta.full) {
+		refreshVaultChangeSoon(delta.structure);
+		return;
+	}
+	if (state.searchHits !== null || state.scope === "trash") {
+		if (delta.structure) void refreshSidebar();
+		return;
+	}
+
+	let notes = state.notes.slice();
+	let total = state.noteTotal;
+	const removedMeta = new Map((delta.removedMeta ?? []).map((meta) => [meta.path, meta]));
+	const upsertIds = new Set((delta.upserted ?? []).map((meta) => meta.id));
+	for (const path of delta.removed ?? []) {
+		const loaded = notes.find((note) => note.path === path);
+		const previous = removedMeta.get(path) ?? loaded;
+		if (previous && !upsertIds.has(previous.id) && matchesScope(previous)) {
+			total = Math.max(0, total - 1);
+		}
+		notes = notes.filter((note) => note.path !== path);
+	}
+
+	for (const meta of delta.upserted ?? []) {
+		const index = notes.findIndex((note) => note.id === meta.id || note.path === meta.path);
+		const previous = index >= 0
+			? notes[index]
+			: [...(delta.previous ?? []), ...(delta.removedMeta ?? [])].find((note) => note.id === meta.id);
+		const before = previous ? matchesScope(previous) : false;
+		const after = matchesScope(meta);
+		if (before !== after) total = Math.max(0, total + (after ? 1 : -1));
+		if (!after) {
+			if (index >= 0) notes.splice(index, 1);
+			continue;
+		}
+		if (index >= 0) notes[index] = meta;
+		else notes.push(meta);
+	}
+
+	sortLoadedNotes(notes);
+	if (state.nextCursor && notes.length > state.notes.length) notes = notes.slice(0, state.notes.length);
+	setState({ notes, noteTotal: total });
+	if (delta.structure) void refreshSidebar();
+}
+
+let pendingVaultStructure = false;
+const flushVaultChange = debounce(() => {
+  const structure = pendingVaultStructure;
+  pendingVaultStructure = false;
+  void refreshVaultChange(structure);
 }, 180);
+
+/** Debounced so a cloud-sync burst costs one round of focused queries. */
+export function refreshVaultChangeSoon(structure = false): void {
+  pendingVaultStructure ||= structure;
+  flushVaultChange();
+}
 
 export function selectScope(scope: Scope, value = ""): void {
   if (state.scope === scope && state.scopeValue === value) return;
-  setState({ scope, scopeValue: value, searchQuery: "", searchHits: null });
+	listGeneration++;
+	setState({
+		scope, scopeValue: value, searchQuery: "", searchHits: null,
+		notes: [], noteTotal: 0, nextCursor: "", listError: "",
+	});
   if (scope === "trash") {
     void refreshTrash();
   } else {
@@ -143,7 +286,8 @@ export function selectScope(scope: Scope, value = ""): void {
 
 export function setSortBy(sortBy: SortBy): void {
   if (state.sortBy === sortBy) return;
-  setState({ sortBy });
+	listGeneration++;
+	setState({ sortBy, notes: [], noteTotal: 0, nextCursor: "", listError: "" });
   void patchSettings({ sortBy });
   void refreshList();
 }
@@ -158,6 +302,7 @@ export function setListView(listView: "list" | "grid"): void {
 
 function tabFromNote(note: Note): Tab {
   return {
+    kind: "markdown",
     id: note.id || note.path,
     path: note.path,
     title: note.title,
@@ -166,11 +311,15 @@ function tabFromNote(note: Note): Tab {
     favorite: note.favorite,
     tags: note.tags ?? [],
     folder: note.folder,
+    created: note.created,
+    updated: note.updated,
     scrollTop: 0,
     cursor: 0,
     mode: "edit",
     revision: note.revision,
     conflict: null,
+    language: "markdown",
+    manualSave: false,
   };
 }
 
@@ -223,6 +372,17 @@ export function activateTab(id: string, focus = true): void {
   if (focus) editor?.focus();
 }
 
+export function openWorkspaceTab(tab: Tab, focus = true): void {
+  const existing = state.tabs.find((entry) => entry.id === tab.id);
+  if (existing) {
+    activateTab(existing.id, focus);
+    return;
+  }
+  if (state.activeTabId) captureEditorInto(state.activeTabId);
+  setState({ tabs: [...state.tabs, tab], activeTabId: tab.id, saveState: "idle" });
+  if (focus) editor?.focus();
+}
+
 export async function closeTab(id: string, options: { skipPrompt?: boolean } = {}): Promise<boolean> {
   const tab = state.tabs.find((t) => t.id === id);
   if (!tab) return true;
@@ -231,8 +391,15 @@ export async function closeTab(id: string, options: { skipPrompt?: boolean } = {
   const current = state.tabs.find((t) => t.id === id);
 
   if (current && isDirty(current) && !options.skipPrompt) {
-    // Auto-save means unsaved work is measured in milliseconds, so flushing is
-    // friendlier than interrogating the user about it.
+    if (current.manualSave || !state.settings.autoSave) {
+      const saveNow = await confirm({
+        title: "保留未保存编辑",
+        message: `「${tabTitle(current)}」还有未保存修改。立即保存后才能关闭；选择继续保留会返回编辑。`,
+        confirmLabel: "立即保存",
+        cancelLabel: "继续保留编辑",
+      });
+      if (!saveNow) return false;
+    }
     if (!(await saveTab(current.id, { silent: true }))) return false;
   }
 
@@ -282,6 +449,16 @@ export function cycleTab(direction: 1 | -1): void {
  */
 const saveTimers = new Map<string, number>();
 
+interface SaveQueue {
+  running: boolean;
+  requested: boolean;
+  force: boolean;
+  notifyOnSuccess: boolean;
+  waiters: Array<(ok: boolean) => void>;
+}
+
+const saveQueues = new Map<string, SaveQueue>();
+
 function cancelScheduledSave(id: string): void {
   const timer = saveTimers.get(id);
   if (timer === undefined) return;
@@ -303,28 +480,33 @@ function scheduleSave(id: string, delay: number): void {
 const conflictDialogs = new Set<string>();
 
 function isConflictError(err: unknown): boolean {
-  return (err instanceof Error ? err.message : String(err)).includes("笔记已在磁盘上被修改");
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("笔记已在磁盘上被修改");
 }
 
-function applyDiskVersion(id: string, note: Note): void {
+function applyDiskVersion(id: string, disk: TabConflict): void {
+  const tab = state.tabs.find((entry) => entry.id === id);
+  if (!tab) return;
   patchTab(id, {
-    path: note.path,
-    title: note.title,
-    folder: note.folder,
-    tags: note.tags ?? [],
-    favorite: note.favorite,
-    content: note.content,
-    savedContent: note.content,
-    revision: note.revision,
+    path: disk.path,
+    title: disk.title,
+    folder: disk.folder ?? tab.folder,
+    tags: disk.tags ?? tab.tags,
+    favorite: disk.favorite ?? tab.favorite,
+    created: disk.created ?? tab.created,
+    updated: disk.updated ?? tab.updated,
+    content: disk.content,
+    savedContent: disk.content,
+    revision: disk.revision,
     conflict: null,
   });
   if (id === state.activeTabId) {
-    editor?.syncDoc(note.content);
+    editor?.syncDoc(disk.content);
     setState({ saveState: "idle" });
   }
 }
 
-function markConflict(id: string, disk: Note): void {
+function markConflict(id: string, disk: TabConflict): void {
   cancelScheduledSave(id);
   const tab = patchTab(id, { conflict: disk });
   if (!tab) return;
@@ -406,8 +588,32 @@ function openConflictDialog(id: string): void {
     closeOnBackdrop: false,
     body: el(
       "div",
-      { class: "confirm__message" },
-      `「${tabTitle(tab)}」在你编辑期间被其他程序修改。请选择要保留的版本。`,
+      { class: "conflict-choice" },
+      el(
+        "div",
+        { class: "confirm__message" },
+        `「${tabTitle(tab)}」在你编辑期间被其他程序修改。以下操作都不会静默覆盖内容。`,
+      ),
+      el(
+        "div",
+        { class: "conflict-choice__list" },
+        el("div", { class: "conflict-choice__item" },
+          el("strong", null, "保留我的版本"),
+          el("span", null, "以当前编辑区内容覆盖磁盘版本。"),
+        ),
+        el(
+          "div",
+          { class: "conflict-choice__item" },
+          el("strong", null, "使用磁盘版本"),
+          el("span", null, "放弃本地未保存修改，加载外部程序写入的版本。"),
+        ),
+        el(
+          "div",
+          { class: "conflict-choice__item" },
+          el("strong", null, "另存我的修改"),
+          el("span", null, "保留磁盘版本，并把本地内容保存成一篇独立副本。"),
+        ),
+      ),
     ),
     footer: [
       button("使用磁盘版本", "disk"),
@@ -440,7 +646,7 @@ export function markDirty(content: string): void {
     cancelScheduledSave(tab.id);
     return;
   }
-  if (!state.settings.autoSave) return;
+  if (tab.manualSave || !state.settings.autoSave) return;
   scheduleSave(tab.id, state.settings.autoSaveDelayMs);
 }
 
@@ -488,11 +694,74 @@ export async function saveTab(
     return false;
   }
 
-  setState({ saveState: "saving" });
+  let queue = saveQueues.get(id);
+  if (!queue) {
+    queue = {
+      running: false,
+      requested: false,
+      force: false,
+      notifyOnSuccess: false,
+      waiters: [],
+    };
+    saveQueues.set(id, queue);
+  }
+  queue.requested = true;
+  queue.force ||= Boolean(options.force);
+  queue.notifyOnSuccess ||= !options.silent;
+
+  const result = new Promise<boolean>((resolve) => queue?.waiters.push(resolve));
+  if (!queue.running) void drainSaveQueue(id, queue);
+  return result;
+}
+
+async function drainSaveQueue(id: string, queue: SaveQueue): Promise<void> {
+  queue.running = true;
+  let ok = true;
+  while (queue.requested) {
+    queue.requested = false;
+    const force = queue.force;
+    queue.force = false;
+    if (!(await persistTabVersion(id, force))) {
+      ok = false;
+      break;
+    }
+
+    // The edit buffer may have advanced while the write was in flight. Queue
+    // exactly that latest version; no intermediate version starts a second
+    // concurrent write and no older response is allowed to replace content.
+    const current = state.tabs.find((entry) => entry.id === id);
+    if (current && isDirty(current) && !current.conflict) queue.requested = true;
+  }
+
+  queue.running = false;
+  const current = state.tabs.find((entry) => entry.id === id);
+  if (id === state.activeTabId && ok && current && !isDirty(current)) {
+    setState({ saveState: "saved" });
+    window.setTimeout(() => {
+      if (state.saveState === "saved") setState({ saveState: "idle" });
+    }, 1600);
+  }
+  if (ok && queue.notifyOnSuccess) notify.success("已保存");
+  const waiters = queue.waiters.splice(0);
+  queue.notifyOnSuccess = false;
+  saveQueues.delete(id);
+  for (const resolve of waiters) resolve(ok);
+}
+
+async function persistTabVersion(id: string, force: boolean): Promise<boolean> {
+  const tab = state.tabs.find((entry) => entry.id === id);
+  if (!tab) return false;
+  if (!isDirty(tab)) return true;
+  if (tab.conflict && !force) {
+    openConflictDialog(id);
+    return false;
+  }
+
+  if (id === state.activeTabId) setState({ saveState: "saving" });
   const content = tab.content;
   const previousPath = tab.path;
   try {
-    const meta = await api.saveNote(tab.path, content, tab.revision, options.force ?? false);
+    const meta = await api.saveNote(tab.path, content, tab.revision, force);
     patchTab(id, {
       savedContent: content,
       path: meta.path,
@@ -500,17 +769,11 @@ export async function saveTab(
       folder: meta.folder,
       tags: meta.tags ?? [],
       favorite: meta.favorite,
+      created: meta.created,
+      updated: meta.updated,
       revision: meta.revision,
       conflict: null,
     });
-    if (id === state.activeTabId) {
-      setState({ saveState: "saved" });
-      window.setTimeout(() => {
-        if (state.saveState === "saved") setState({ saveState: "idle" });
-      }, 1600);
-    }
-    if (!options.silent) notify.success("已保存");
-
     // A save changes one row, and a save cannot move a note out of the scope
     // being shown. Re-querying the whole list and re-walking the vault for the
     // sidebar after every autosave was the write path's dominant cost.
@@ -518,15 +781,19 @@ export async function saveTab(
     refreshSidebarSoon();
     return true;
   } catch (err) {
-    setState({ saveState: "error" });
+    if (id === state.activeTabId) setState({ saveState: "error" });
     if (isConflictError(err)) {
-      const disk = await api.getNote(tab.path, tab.id).catch(() => null);
+      const disk = await readDiskConflict(tab);
       if (disk) {
         markConflict(id, disk);
         return false;
       }
     }
-    reportError("保存失败", err);
+    const message = err instanceof Error ? err.message : String(err);
+    notify.error(`保存失败：${message}`, {
+      duration: 12_000,
+      action: { label: "重试", run: () => void saveTab(id) },
+    });
     return false;
   }
 }
@@ -583,11 +850,12 @@ export async function saveActive(options: { silent?: boolean } = {}): Promise<bo
  * The close handshake depends on the answer: quitting while a write failed
  * would throw the edit away with no way to get it back.
  */
-export async function saveAll(): Promise<boolean> {
+export async function saveAll(options: { includeManual?: boolean } = {}): Promise<boolean> {
   if (state.activeTabId) captureEditorInto(state.activeTabId);
   let ok = true;
   for (const tab of [...state.tabs]) {
     if (!isDirty(tab)) continue;
+    if (tab.manualSave && options.includeManual === false) continue;
     if (!(await saveTab(tab.id, { silent: true }))) ok = false;
   }
   return ok;
@@ -611,8 +879,13 @@ export async function newNote(folder?: string): Promise<void> {
 }
 
 export async function renameNote(path: string, title: string): Promise<void> {
+  const nextTitle = title.trim();
+  if (!nextTitle) {
+    notify.error("标题不能为空");
+    return;
+  }
   try {
-    const meta = await api.renameNote(path, title);
+    const meta = await api.renameNote(path, nextTitle);
     const tab = tabByPath(path);
     if (tab) {
       // The heading changed on disk, so the buffer has to follow or the next
@@ -624,6 +897,8 @@ export async function renameNote(path: string, title: string): Promise<void> {
         content: note.content,
         savedContent: note.content,
         revision: note.revision,
+        created: note.created,
+        updated: note.updated,
         conflict: null,
       });
       if (tab.id === state.activeTabId) editor?.syncDoc(note.content);
@@ -645,6 +920,7 @@ export async function toggleFavorite(path: string): Promise<void> {
       patchTab(tab.id, {
         favorite: updated.favorite,
         revision: updated.revision,
+        updated: updated.updated,
       });
     }
     await refreshList();
@@ -663,6 +939,7 @@ export async function setTags(path: string, tags: string[]): Promise<void> {
       patchTab(tab.id, {
         tags: updated.tags ?? [],
         revision: updated.revision,
+        updated: updated.updated,
       });
     }
     await Promise.all([refreshList(), refreshSidebar()]);
@@ -680,6 +957,7 @@ export async function moveNote(path: string, folder: string): Promise<void> {
         path: meta.path,
         folder: meta.folder,
         revision: meta.revision,
+        updated: meta.updated,
       });
     }
     await Promise.all([refreshList(), refreshSidebar()]);
@@ -770,8 +1048,13 @@ export async function emptyTrash(): Promise<void> {
 /* ---------------------------------------------------------------- folders */
 
 export async function createFolder(name: string): Promise<void> {
+  const nextName = name.trim();
+  if (!nextName) {
+    notify.error("文件夹名不能为空");
+    return;
+  }
   try {
-    const folder = await api.createFolder(name);
+    const folder = await api.createFolder(nextName);
     await refreshSidebar();
     selectScope("folder", folder.path);
     notify.success(`已创建「${folder.name}」`);
@@ -781,15 +1064,25 @@ export async function createFolder(name: string): Promise<void> {
 }
 
 export async function renameFolder(path: string, name: string): Promise<void> {
+  const nextName = name.trim();
+  if (!nextName) {
+    notify.error("文件夹名不能为空");
+    return;
+  }
   try {
-    await api.renameFolder(path, name);
-    if (state.scope === "folder" && state.scopeValue === path) {
-      setState({ scopeValue: name });
+    const newPath = await api.renameFolder(path, nextName);
+    if (state.scope === "folder") {
+      const prefix = `${path}/`;
+      if (state.scopeValue === path) {
+        setState({ scopeValue: newPath });
+      } else if (state.scopeValue.startsWith(prefix)) {
+        setState({ scopeValue: newPath + state.scopeValue.slice(path.length) });
+      }
     }
     await Promise.all([refreshList(), refreshSidebar()]);
     // Open tabs still point at the old directory, so reload their metadata.
     await reconcileTabs();
-    notify.success("已重命名");
+    notify.success(`已重命名为「${newPath.split("/").pop() || newPath}」`);
   } catch (err) {
     reportError("重命名文件夹", err);
   }
@@ -819,10 +1112,15 @@ export async function deleteFolder(path: string): Promise<void> {
 /* ---------------------------------------------------------------- tags */
 
 export async function renameTag(oldName: string, newName: string): Promise<void> {
+  const nextName = newName.trim().replace(/^#/, "").trim();
+  if (!nextName) {
+    notify.error("标签名不能为空");
+    return;
+  }
   try {
-    const count = await api.renameTag(oldName, newName);
+    const count = await api.renameTag(oldName, nextName);
     if (state.scope === "tag" && state.scopeValue === oldName) {
-      setState({ scopeValue: newName });
+      setState({ scopeValue: nextName });
     }
     await Promise.all([refreshList(), refreshSidebar()]);
     notify.success(`已更新 ${count} 篇笔记的标签`);
@@ -851,10 +1149,12 @@ export const runSearch = debounce(async (raw: string) => {
     return;
   }
   try {
+    const startedAt = performance.now();
     const hits = await api.search(value, 80);
     // A newer keystroke may have landed while this request was in flight.
     if (state.searchQuery.trim() !== value) return;
     setState({ searchHits: hits, searching: false });
+    recordFrontendTiming("searchMs", startedAt);
   } catch (err) {
     setState({ searching: false });
     reportError("搜索", err);
@@ -914,13 +1214,14 @@ export async function patchSettings(patch: Partial<Settings>): Promise<void> {
  * is far worse than showing slightly stale metadata.
  */
 export async function reconcileTabs(): Promise<void> {
-  if (state.tabs.length === 0) return;
+  const markdownTabs = state.tabs.filter((tab) => tab.kind === "markdown");
+  if (markdownTabs.length === 0) return;
   if (state.activeTabId) captureEditorInto(state.activeTabId);
 
   // Fetched together: an external change with several tabs open used to wait
   // for one full round trip per tab, one after another.
   const loaded = await Promise.all(
-    state.tabs.map((tab) =>
+    markdownTabs.map((tab) =>
       api.getNote(tab.path, tab.id).then(
         (note) => ({ id: tab.id, note }),
         () => ({ id: tab.id, note: null }),
@@ -957,4 +1258,8 @@ export async function reconcileTabs(): Promise<void> {
 /** Title shown in a tab, derived live so it updates as you type the heading. */
 export function tabTitle(tab: Tab): string {
   return titleOf(tab.content) || tab.title || "未命名笔记";
+}
+
+async function readDiskConflict(tab: Tab): Promise<TabConflict | null> {
+  return api.getNote(tab.path, tab.id).catch(() => null);
 }

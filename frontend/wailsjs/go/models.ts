@@ -10,7 +10,7 @@ export namespace config {
 	    static createFrom(source: any = {}) {
 	        return new WindowState(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.width = source["width"];
@@ -42,6 +42,8 @@ export namespace config {
 	    listView: string;
 	    sortBy: string;
 	    showLivePreview: boolean;
+	    sidebarWidth: number;
+	    listWidth: number;
 	    exportDir: string;
 	    lastExportFormat: string;
 	    window: WindowState;
@@ -49,7 +51,7 @@ export namespace config {
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.vaultPath = source["vaultPath"];
@@ -73,6 +75,8 @@ export namespace config {
 	        this.listView = source["listView"];
 	        this.sortBy = source["sortBy"];
 	        this.showLivePreview = source["showLivePreview"];
+	        this.sidebarWidth = source["sidebarWidth"];
+	        this.listWidth = source["listWidth"];
 	        this.exportDir = source["exportDir"];
 	        this.lastExportFormat = source["lastExportFormat"];
 	        this.window = this.convertValues(source["window"], WindowState);
@@ -113,7 +117,7 @@ export namespace exporter {
 	    static createFrom(source: any = {}) {
 	        return new Request(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.format = source["format"];
@@ -197,7 +201,33 @@ export namespace index {
 }
 
 export namespace main {
-	
+
+	export class IndexState {
+	    phase: string;
+	    ready: boolean;
+	    cached: boolean;
+	    processed: number;
+	    total: number;
+	    error?: string;
+	    lastSyncMs: number;
+	    lastChanged: number;
+
+	    static createFrom(source: any = {}) {
+	        return new IndexState(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.phase = source["phase"];
+	        this.ready = source["ready"];
+	        this.cached = source["cached"];
+	        this.processed = source["processed"];
+	        this.total = source["total"];
+	        this.error = source["error"];
+	        this.lastSyncMs = source["lastSyncMs"];
+	        this.lastChanged = source["lastChanged"];
+	    }
+	}
 	export class Stats {
 	    notes: number;
 	    words: number;
@@ -227,7 +257,8 @@ export namespace main {
 	    version: string;
 	    error: string;
 	    stats: Stats;
-	
+	    indexState: IndexState;
+
 	    static createFrom(source: any = {}) {
 	        return new Bootstrap(source);
 	    }
@@ -240,6 +271,80 @@ export namespace main {
 	        this.version = source["version"];
 	        this.error = source["error"];
 	        this.stats = this.convertValues(source["stats"], Stats);
+	        this.indexState = this.convertValues(source["indexState"], IndexState);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Diagnostics {
+	    workingSetBytes: number;
+	    mainProcessBytes: number;
+	    webViewBytes: number;
+	    nodeBytes: number;
+	    otherProcessBytes: number;
+	    processCount: number;
+	    goHeapBytes: number;
+	    vaultBytes: number;
+	    indexBytes: number;
+	    notes: number;
+	    folders: number;
+	    tags: number;
+	    lastSyncMs: number;
+	    lastSyncChanged: number;
+
+	    static createFrom(source: any = {}) {
+	        return new Diagnostics(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workingSetBytes = source["workingSetBytes"];
+	        this.mainProcessBytes = source["mainProcessBytes"];
+	        this.webViewBytes = source["webViewBytes"];
+	        this.nodeBytes = source["nodeBytes"];
+	        this.otherProcessBytes = source["otherProcessBytes"];
+	        this.processCount = source["processCount"];
+	        this.goHeapBytes = source["goHeapBytes"];
+	        this.vaultBytes = source["vaultBytes"];
+	        this.indexBytes = source["indexBytes"];
+	        this.notes = source["notes"];
+	        this.folders = source["folders"];
+	        this.tags = source["tags"];
+	        this.lastSyncMs = source["lastSyncMs"];
+	        this.lastSyncChanged = source["lastSyncChanged"];
+	    }
+	}
+
+	export class NotePage {
+	    items: store.Meta[];
+	    total: number;
+	    nextCursor?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NotePage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], store.Meta);
+	        this.total = source["total"];
+	        this.nextCursor = source["nextCursor"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -259,6 +364,26 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class NotePageRequest {
+	    scope: string;
+	    value: string;
+	    sortBy: string;
+	    limit: number;
+	    cursor: string;
+
+	    static createFrom(source: any = {}) {
+	        return new NotePageRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scope = source["scope"];
+	        this.value = source["value"];
+	        this.sortBy = source["sortBy"];
+	        this.limit = source["limit"];
+	        this.cursor = source["cursor"];
+	    }
 	}
 	export class SidebarData {
 	    folders: store.Folder[];
@@ -549,4 +674,3 @@ export namespace store {
 	}
 
 }
-

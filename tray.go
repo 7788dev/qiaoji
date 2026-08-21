@@ -70,9 +70,9 @@ func (t *tray) start(ctx context.Context, app *App) {
 				for {
 					select {
 					case <-mShow.ClickedCh:
-						showWindow(ctx)
+						app.ShowWindow()
 					case <-mNew.ClickedCh:
-						showWindow(ctx)
+						app.ShowWindow()
 						app.emit("tray:new-note", nil)
 					case <-mQuit.ClickedCh:
 						// Quitting from the tray must exit even when the

@@ -16,7 +16,9 @@ import {
   type SnippetGroup,
 } from "../lib/templates";
 import { activeTab, patchTab, state, subscribe } from "../store";
+import { recordFrontendTiming } from "../lib/perf";
 import { anchorRect, showMenu, type MenuEntry } from "./menu";
+import { prompt } from "./modal";
 import { notify, reportError } from "./toast";
 
 export interface EditorPaneHandlers {
@@ -30,6 +32,8 @@ export interface EditorPane {
   toggleMode: () => void;
   setMode: (mode: "edit" | "preview") => void;
   showOutline: (anchor: HTMLElement) => void;
+  showActions: (anchor: HTMLElement) => void;
+  refreshPreview: () => void;
   focus: () => void;
   currentHtml: () => Promise<{ html: string; hasMath: boolean }>;
 }
@@ -56,8 +60,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
   );
 
   const stage = el("div", { class: "pane__stage" }, editorHost, preview, emptyState);
-  const toolbar = el("div", { class: "pane__toolbar" });
-  const root = el("section", { class: "pane", "aria-label": "编辑区" }, toolbar, stage);
+  const root = el("section", { class: "pane", "aria-label": "编辑区" }, stage);
 
   /* ------------------------------------------------------------ editor */
 
@@ -68,7 +71,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
       onChange: (doc) => {
         actions.markDirty(doc);
         ensureModules(doc);
-        if (currentMode() === "preview") schedulePreview();
+        if (currentMode() === "preview" && state.settings.showLivePreview) schedulePreview();
       },
       onCursor: handlers.onCursor,
       onSave: () => void actions.saveActive(),
@@ -114,14 +117,9 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     for (const entry of entries) {
       void (async () => {
         try {
-          const bytes = Array.from(new Uint8Array(await entry.file.arrayBuffer()));
           const current = state.tabs.find((candidate) => candidate.id === tab.id);
           if (!current) return;
-          const relative = await api.saveAsset(
-            current.path,
-            entry.file.name || `${entry.alt}.png`,
-            bytes,
-          );
+          const relative = await api.uploadAsset(current.path, entry.file);
           actions.replaceUploadPlaceholder(
             tab.id,
             entry.placeholder,
@@ -161,123 +159,154 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     };
   }
 
-  /* ------------------------------------------------------------ toolbar */
+  /* ------------------------------------------------------ on-demand actions */
 
-  interface ToolButton {
-    icon: string;
-    title: string;
-    run: () => void;
-  }
-
-  function buildToolbar(): void {
-    const groups: (ToolButton | "sep")[] = [
-      { icon: "heading", title: "标题  Ctrl+1 / 2 / 3", run: () => headingMenu() },
-      "sep",
-      { icon: "bold", title: "加粗  Ctrl+B", run: () => editor.run(commands.bold) },
-      { icon: "italic", title: "斜体  Ctrl+I", run: () => editor.run(commands.italic) },
-      {
-        icon: "strikethrough",
-        title: "删除线  Ctrl+Shift+X",
-        run: () => editor.run(commands.strike),
-      },
-      { icon: "codeTag", title: "行内代码  Ctrl+E", run: () => editor.run(commands.code) },
-      "sep",
-      {
-        icon: "plus",
-        title: "插入内容与模板（也可在正文中点右键）",
-        run: () => openInsertMenu(),
-      },
-      "sep",
-      { icon: "bulletList", title: "无序列表", run: () => editor.run(commands.bullet) },
-      { icon: "checkSquare", title: "任务项  Ctrl+Shift+L", run: () => editor.run(commands.task) },
-      { icon: "quote", title: "引用", run: () => editor.run(commands.quote) },
-      { icon: "external", title: "插入链接  Ctrl+K", run: () => editor.run(commands.link) },
-      { icon: "table", title: "插入表格", run: () => editor.run(commands.table) },
-      "sep",
-      { icon: "star", title: "收藏 / 取消收藏", run: () => toggleFavorite() },
-    ];
-
-    toolbar.replaceChildren(
-      ...groups.map((entry) =>
-        entry === "sep"
-          ? el("span", { class: "toolbar-sep" })
-          : el(
-              "button",
-              {
-                class: "ibtn",
-                type: "button",
-                title: entry.title,
-                "aria-label": entry.title,
-                onclick: entry.run,
-                dataset: entry.icon === "plus" ? { insert: "1" } : undefined,
-              },
-              icon(entry.icon, 15),
-            ),
-      ),
-      el("div", { class: "spacer" }),
-      el(
-        "button",
-        {
-          class: "ibtn",
-          type: "button",
-          title: "在资源管理器中显示",
-          onclick: () => {
-            const tab = activeTab();
-            if (tab) void api.revealInExplorer(tab.path);
-          },
-        },
-        icon("folderOpen", 15),
-      ),
-    );
-  }
-
-  /** Opens the insert menu anchored under its toolbar button. */
-  function openInsertMenu(): void {
-    const button = toolbar.querySelector<HTMLElement>('[data-insert="1"]');
-    const rect = button ? anchorRect(button) : undefined;
-    showMenu(insertEntries(editor), {
-      x: rect?.left ?? 200,
-      y: (rect?.bottom ?? 100) + 4,
-    });
-  }
-
-  function headingMenu(): void {
-    const anchor = toolbar.querySelector<HTMLElement>("button");
-    const rect = anchor ? anchorRect(anchor) : undefined;
-    showMenu(
-      [1, 2, 3, 4].map((level) => ({
-        label: `${"#".repeat(level)} 标题 ${level}`,
-        run: () => editor.run(commands.heading(level)),
-      })).concat([{ label: "清除标题", run: () => editor.run(commands.heading(0)) }]),
-      { x: rect?.left ?? 100, y: (rect?.bottom ?? 100) + 4 },
-    );
-  }
-
-  function toggleFavorite(): void {
+  function showActions(anchor: HTMLElement): void {
     const tab = activeTab();
-    if (tab) void actions.toggleFavorite(tab.path);
+    if (!tab) return;
+    const rect = anchorRect(anchor);
+    showMenu(
+      [
+        {
+          label: "标题",
+          icon: "heading",
+          children: [
+            ...[1, 2, 3, 4].map((level) => ({
+              label: `标题 ${level}`,
+              shortcut: `Ctrl+${level}`,
+              run: () => editor.run(commands.heading(level)),
+            })),
+            { label: "清除标题", run: () => editor.run(commands.heading(0)) },
+          ],
+        },
+        {
+          label: "格式",
+          icon: "bold",
+          children: [
+            { label: "加粗", icon: "bold", shortcut: "Ctrl+B", run: () => editor.run(commands.bold) },
+            { label: "斜体", icon: "italic", shortcut: "Ctrl+I", run: () => editor.run(commands.italic) },
+            { label: "删除线", icon: "strikethrough", run: () => editor.run(commands.strike) },
+            { label: "行内代码", icon: "codeTag", shortcut: "Ctrl+E", run: () => editor.run(commands.code) },
+            "separator",
+            { label: "引用", icon: "quote", run: () => editor.run(commands.quote) },
+            { label: "无序列表", icon: "bulletList", run: () => editor.run(commands.bullet) },
+            { label: "任务项", icon: "checkSquare", run: () => editor.run(commands.task) },
+          ],
+        },
+        { label: "插入", icon: "plus", children: insertEntries(editor) },
+        {
+          label: "笔记标签",
+          icon: "tag",
+          children: [
+            ...tab.tags.map((name) => ({
+              label: `移除「${name}」`,
+              icon: "close",
+              run: () => void actions.setTags(tab.path, tab.tags.filter((tag) => tag !== name)),
+            })),
+            ...(tab.tags.length > 0 ? (["separator"] as const) : []),
+            ...state.tags
+              .filter((tag) => !tab.tags.includes(tag.name))
+              .slice(0, 8)
+              .map((tag) => ({
+                label: tag.name,
+                icon: "tag",
+                run: () => void actions.setTags(tab.path, [...tab.tags, tag.name]),
+              })),
+            {
+              label: "新建标签…",
+              icon: "plus",
+              run: async () => {
+                const name = await prompt({
+                  title: "添加标签",
+                  label: "标签名称",
+                  placeholder: "例如：灵感",
+                });
+                if (name) await actions.setTags(tab.path, [...tab.tags, name]);
+              },
+            },
+          ],
+        },
+        "separator",
+        {
+          label: tab.favorite ? "取消收藏" : "加入收藏",
+          icon: "star",
+          run: () => void actions.toggleFavorite(tab.path),
+        },
+        {
+          label: "在资源管理器中显示",
+          icon: "folderOpen",
+          run: () => void api.revealInExplorer(tab.path),
+        },
+      ],
+      { x: rect.right, y: rect.bottom + 5 },
+    );
   }
-
-  buildToolbar();
 
   /* ------------------------------------------------------------ preview */
 
-  const schedulePreview = debounce(() => void paintPreview(), 140);
+  type IdleWindow = Window & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+    cancelIdleCallback?: (id: number) => void;
+  };
 
-  async function paintPreview(): Promise<void> {
+  let previewTimer = 0;
+  let previewIdle = 0;
+  let previewGeneration = 0;
+  let renderedPreview = { tabId: "", source: "" };
+
+  function cancelPreviewSchedule(): void {
+    if (previewTimer) window.clearTimeout(previewTimer);
+    previewTimer = 0;
+    if (previewIdle) (window as IdleWindow).cancelIdleCallback?.(previewIdle);
+    previewIdle = 0;
+  }
+
+  function schedulePreview(force = false): void {
+    if (!force && !state.settings.showLivePreview) return;
+    cancelPreviewSchedule();
+    const generation = ++previewGeneration;
+    const sourceLength = editor.doc.length;
+    previewTimer = window.setTimeout(() => {
+      previewTimer = 0;
+      const run = () => {
+        previewIdle = 0;
+        if (generation === previewGeneration) void paintPreview(generation, force);
+      };
+      if (sourceLength < 80_000) {
+        run();
+        return;
+      }
+      const requestIdle = (window as IdleWindow).requestIdleCallback;
+      if (requestIdle) previewIdle = requestIdle(run, { timeout: 700 });
+      else previewIdle = window.setTimeout(run, 32);
+    }, force ? 0 : 140);
+  }
+
+  async function paintPreview(generation = ++previewGeneration, force = false): Promise<void> {
     const tab = activeTab();
     if (!tab) return;
     const source = editor.doc;
+    if (!force && renderedPreview.tabId === tab.id && renderedPreview.source === source) return;
 
-    previewInner.innerHTML = render(source, tab.path).html;
+    const startedAt = performance.now();
+    const first = render(source, tab.path).html;
+    if (generation !== previewGeneration || activeTab()?.id !== tab.id) return;
+    previewInner.innerHTML = first;
+    renderedPreview = { tabId: tab.id, source };
+    recordFrontendTiming("previewMs", startedAt);
 
-    // Maths and highlighting arrive asynchronously the first time they are
-    // needed; re-render once they are in so the output is complete. Once both
-    // modules are in memory the second pass would render the same HTML twice.
     if (modulesReadyFor(source)) return;
     await preloadFor(source);
-    if (activeTab()?.id !== tab.id) return;
-    previewInner.innerHTML = render(editor.doc, tab.path).html;
+    if (
+      generation !== previewGeneration ||
+      activeTab()?.id !== tab.id ||
+      editor.doc !== source
+    ) {
+      return;
+    }
+    const secondStartedAt = performance.now();
+    previewInner.innerHTML = render(source, tab.path).html;
+    recordFrontendTiming("previewMs", secondStartedAt);
   }
 
   // Links inside the preview must not navigate the WebView away from the app.
@@ -319,15 +348,15 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     const mode = tab?.mode ?? "edit";
     const previewing = mode === "preview";
     const leftPreview = appliedMode === "preview" && mode === "edit";
+    const enteredPreview =
+      previewing && (appliedMode !== "preview" || renderedPreview.tabId !== tab?.id);
     appliedMode = tab ? mode : null;
 
     editorHost.hidden = !tab || previewing;
     preview.hidden = !tab || !previewing;
     emptyState.hidden = Boolean(tab);
-    toolbar.hidden = !tab || previewing;
-
     if (previewing) {
-      void paintPreview();
+      if (enteredPreview) schedulePreview(true);
       return;
     }
     // Coming back from preview puts the caret back where the user was reading.
@@ -395,12 +424,16 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     if (tab.id !== loadedTabId) {
       loadedTabId = tab.id;
       editor.loadDoc(tab.content, tab.cursor, tab.scrollTop);
+      editor.setReadOnly(false);
+      void editor.setLanguage(tab.language);
       // Warm the optional modules, then repaint: KaTeX arrives after the first
       // render, and the formulas would otherwise stay as placeholder text.
       void preloadFor(tab.content).then(() => {
         if (activeTab()?.id === tab.id) editor.refreshMath();
       });
     }
+    editor.setReadOnly(false);
+    void editor.setLanguage(tab.language);
     applyMode();
   }
 
@@ -445,7 +478,7 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
       unsubscribeTabs();
       unsubscribeSettings();
       ensureModules.cancel();
-      schedulePreview.cancel();
+      cancelPreviewSchedule();
       removePreviewClick();
       removeContextMenu();
       unregisterEditor();
@@ -454,6 +487,8 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
     toggleMode,
     setMode,
     showOutline,
+    showActions,
+    refreshPreview: () => schedulePreview(true),
     focus: () => {
       if (currentMode() === "preview") preview.focus();
       else editor.focus();
@@ -477,7 +512,7 @@ function snippetItems(editor: MarkdownEditor, group: SnippetGroup): MenuEntry[] 
   }));
 }
 
-/** The insert and template branches, shared by the toolbar and right-click. */
+/** The insert and template branches, shared by the action and right-click menus. */
 function insertEntries(editor: MarkdownEditor): MenuEntry[] {
   return [
     ...snippetGroups.map((group) => ({

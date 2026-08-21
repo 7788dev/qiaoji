@@ -16,12 +16,14 @@ export interface VirtualListOptions<T> {
   columns?: number;
   gap?: number;
   render: (item: T, index: number) => HTMLElement;
+  /** Updates a retained keyed node when its item or index changes. */
+  update?: (node: HTMLElement, item: T, index: number) => void;
   key: (item: T) => string;
 }
 
 export class VirtualList<T> {
-  private readonly opts: Required<Omit<VirtualListOptions<T>, "render" | "key" | "scroller">> &
-    Pick<VirtualListOptions<T>, "render" | "key" | "scroller">;
+  private readonly opts: Required<Omit<VirtualListOptions<T>, "render" | "update" | "key" | "scroller">> &
+    Pick<VirtualListOptions<T>, "render" | "update" | "key" | "scroller">;
 
   private readonly sizer: HTMLElement;
   private readonly window: HTMLElement;
@@ -63,11 +65,13 @@ export class VirtualList<T> {
     });
   }
 
-  setItems(items: T[], options: { preserveScroll?: boolean } = {}): void {
+  setItems(items: T[], options: { preserveScroll?: boolean; reset?: boolean } = {}): void {
     this.items = items;
     if (!options.preserveScroll) this.opts.scroller.scrollTop = 0;
-    this.rendered.clear();
-    this.window.replaceChildren();
+    if (options.reset) {
+      this.rendered.clear();
+      this.window.replaceChildren();
+    }
     this.firstRow = -1;
     this.lastRow = -1;
     this.paint(true);
@@ -75,8 +79,6 @@ export class VirtualList<T> {
 
   /** Re-renders in place, keeping the scroll position (used for selection changes). */
   refresh(): void {
-    this.rendered.clear();
-    this.window.replaceChildren();
     this.firstRow = -1;
     this.lastRow = -1;
     this.paint(true);
@@ -116,7 +118,7 @@ export class VirtualList<T> {
     this.lastRow = last;
 
     const wanted = new Map<string, HTMLElement>();
-    const fragment = document.createDocumentFragment();
+    let previous: Element | null = null;
 
     for (let row = first; row <= last; row++) {
       for (let col = 0; col < columns; col++) {
@@ -129,20 +131,29 @@ export class VirtualList<T> {
         if (!node) {
           node = this.opts.render(item, index);
           node.style.position = "absolute";
-          node.style.top = `${row * stride}px`;
-          if (columns > 1) {
-            const width = `calc((100% - ${(columns - 1) * this.opts.gap}px) / ${columns})`;
-            node.style.left = `calc((${width} + ${this.opts.gap}px) * ${col})`;
-            node.style.width = width;
-          } else {
-            node.style.left = "0";
-            node.style.right = "0";
-          }
-          node.style.height = `${this.opts.rowHeight}px`;
-          fragment.appendChild(node);
-        } else {
-          node.style.top = `${row * stride}px`;
         }
+        this.opts.update?.(node, item, index);
+        node.style.top = `${row * stride}px`;
+        if (columns > 1) {
+          const width = `calc((100% - ${(columns - 1) * this.opts.gap}px) / ${columns})`;
+          node.style.left = `calc((${width} + ${this.opts.gap}px) * ${col})`;
+          node.style.right = "";
+          node.style.width = width;
+        } else {
+          node.style.left = "0";
+          node.style.right = "0";
+          node.style.width = "";
+        }
+        node.style.height = `${this.opts.rowHeight}px`;
+
+        // Absolute positioning controls the visual layout, but DOM order still
+        // controls keyboard traversal and screen-reader order. Reconcile nodes
+        // in place so a sort change keeps both aligned without discarding focus.
+        const slot: Element | null = previous
+          ? previous.nextElementSibling
+          : this.window.firstElementChild;
+        if (slot !== node) this.window.insertBefore(node, slot);
+        previous = node;
         wanted.set(id, node);
       }
     }
@@ -151,7 +162,6 @@ export class VirtualList<T> {
       if (!wanted.has(id)) node.remove();
     }
     this.rendered = wanted;
-    if (fragment.childNodes.length > 0) this.window.appendChild(fragment);
   }
 
   /** Scrolls an item into view, used when selection moves by keyboard. */

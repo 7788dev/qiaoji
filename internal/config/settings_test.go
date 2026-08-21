@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -87,5 +88,73 @@ func TestLoadBacksUpCorruptSettings(t *testing.T) {
 	}
 	if string(data) != corrupt {
 		t.Fatalf("backup = %q, want %q", data, corrupt)
+	}
+}
+
+func TestLoadOldSettingsAddsPersistedPanelWidths(t *testing.T) {
+	t.Parallel()
+
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"vaultPath":"C:\\notes","theme":"dark"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := st.Get()
+	if got.SidebarWidth != 208 || got.ListWidth != 292 {
+		t.Fatalf("panel widths = %d/%d, want 208/292", got.SidebarWidth, got.ListWidth)
+	}
+	if got.Theme != "dark" || got.VaultPath != `C:\notes` {
+		t.Fatalf("old settings were not preserved: %+v", got)
+	}
+}
+
+func TestPanelWidthsAreNormalised(t *testing.T) {
+	t.Parallel()
+
+	settings := Defaults()
+	settings.SidebarWidth = 10
+	settings.ListWidth = 900
+	settings.normalise()
+	if settings.SidebarWidth != Defaults().SidebarWidth || settings.ListWidth != Defaults().ListWidth {
+		t.Fatalf("normalised widths = %d/%d", settings.SidebarWidth, settings.ListWidth)
+	}
+}
+
+func TestLegacyExtensionSettingsAreDroppedOnSave(t *testing.T) {
+	t.Parallel()
+
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	legacy := `{
+  "vaultPath": "C:\\notes",
+  "theme": "dark",
+  "hexoProjects": [{"id": "old-project", "path": "C:\\blog"}],
+  "lastHexoProjectId": "old-project",
+  "managedNodeRuntime": {"version": "22.0.0"}
+}`
+	if err := os.WriteFile(settingsPath, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := load(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Get(); got.Theme != "dark" || got.VaultPath != `C:\notes` {
+		t.Fatalf("ordinary settings were not preserved: %+v", got)
+	}
+	if err := st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{"hexoProjects", "lastHexoProjectId", "managedNodeRuntime"} {
+		if bytes.Contains(saved, []byte(removed)) {
+			t.Errorf("legacy setting %q survived save:\n%s", removed, saved)
+		}
 	}
 }

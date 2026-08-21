@@ -13,6 +13,9 @@ node_modules/
 tmp/
 output/
 
+# Disposable fixture vault and AppData root used by UI verification
+.tmp-ui-*/
+
 # Agent / debug dumps
 debug-*.log
 *.log

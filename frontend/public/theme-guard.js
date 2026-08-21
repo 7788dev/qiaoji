@@ -11,7 +11,7 @@
       saved === "dark" ||
       (saved === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.dataset.theme = dark ? "dark" : "light";
-    document.documentElement.style.background = dark ? "#1d2024" : "#eff0f2";
+    document.documentElement.style.background = dark ? "#111315" : "#f6f7f9";
   } catch (e) {
     /* private mode or storage disabled: fall back to light */
   }

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -34,8 +35,46 @@ CREATE TABLE IF NOT EXISTS notes(
   content  TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS notes_updated_idx  ON notes(updated DESC);
+CREATE INDEX IF NOT EXISTS notes_created_idx  ON notes(created DESC);
+CREATE INDEX IF NOT EXISTS notes_title_idx    ON notes(title COLLATE NOCASE ASC);
 CREATE INDEX IF NOT EXISTS notes_folder_idx   ON notes(folder);
-CREATE UNIQUE INDEX IF NOT EXISTS notes_id_idx ON notes(id);
+CREATE INDEX IF NOT EXISTS notes_favorite_updated_idx ON notes(favorite, updated DESC);
+	CREATE UNIQUE INDEX IF NOT EXISTS notes_id_idx ON notes(id);
+CREATE TABLE IF NOT EXISTS note_tags(
+	  note_rowid INTEGER NOT NULL REFERENCES notes(rowid) ON DELETE CASCADE,
+	  tag TEXT NOT NULL,
+	  PRIMARY KEY(note_rowid, tag)
+	);
+CREATE INDEX IF NOT EXISTS note_tags_tag_idx ON note_tags(tag, note_rowid);
+CREATE TABLE IF NOT EXISTS folder_cache(
+	  path TEXT PRIMARY KEY
+);
+CREATE TABLE IF NOT EXISTS folder_counts(
+	  path TEXT PRIMARY KEY,
+	  count INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS index_stats(
+	  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+	  notes INTEGER NOT NULL DEFAULT 0,
+	  words INTEGER NOT NULL DEFAULT 0,
+	  bytes INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO index_stats(singleton) VALUES(1);
+CREATE TABLE IF NOT EXISTS index_meta(
+	  key TEXT PRIMARY KEY,
+	  value TEXT NOT NULL
+);
+INSERT OR IGNORE INTO index_meta(key, value) VALUES('calibrated', '0');
+
+CREATE TRIGGER IF NOT EXISTS notes_stats_ai AFTER INSERT ON notes BEGIN
+	UPDATE index_stats SET notes = notes + 1, words = words + new.words, bytes = bytes + new.size WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS notes_stats_ad AFTER DELETE ON notes BEGIN
+	UPDATE index_stats SET notes = MAX(0, notes - 1), words = MAX(0, words - old.words), bytes = MAX(0, bytes - old.size) WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS notes_stats_au AFTER UPDATE ON notes BEGIN
+	UPDATE index_stats SET words = MAX(0, words + new.words - old.words), bytes = MAX(0, bytes + new.size - old.size) WHERE singleton = 1;
+END;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
   title, content,
@@ -60,12 +99,20 @@ END;
 const minTrigram = 3
 
 type Index struct {
-	mu sync.Mutex
-	db *sql.DB
+	mu   sync.Mutex
+	db   *sql.DB
+	path string
 }
 
 func Open(path string) (*Index, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)")
+	_, statErr := os.Stat(path)
+	existed := statErr == nil
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +121,108 @@ func Open(path string) (*Index, error) {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
-	return &Index{db: db}, nil
+	ix := &Index{db: db, path: path}
+	if err := ix.migrateRelations(existed); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
+	return ix, nil
+}
+
+func (ix *Index) Path() string {
+	if ix == nil {
+		return ""
+	}
+	return ix.path
+}
+
+const schemaVersion = 5
+
+func (ix *Index) migrateRelations(existed bool) error {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	var version int
+	if err := ix.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version >= schemaVersion {
+		return nil
+	}
+	tx, err := ix.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM note_tags`); err != nil {
+		return err
+	}
+	rows, err := tx.Query(`SELECT rowid, tags FROM notes WHERE tags <> ''`)
+	if err != nil {
+		return err
+	}
+	type relation struct {
+		rowID int64
+		tags  []string
+	}
+	var relations []relation
+	for rows.Next() {
+		var rowID int64
+		var tags string
+		if err := rows.Scan(&rowID, &tags); err != nil {
+			rows.Close()
+			return err
+		}
+		relations = append(relations, relation{rowID: rowID, tags: splitTags(tags)})
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, relation := range relations {
+		if err := replaceTagRows(tx, relation.rowID, relation.tags); err != nil {
+			return err
+		}
+	}
+	if err := refreshSummaryTx(tx); err != nil {
+		return err
+	}
+	if err := rebuildFolderCountsTx(tx); err != nil {
+		return err
+	}
+	if version < 5 {
+		// Older indexes stored the logical front matter `updated` value in
+		// mtime. Reset it so the first background calibration after upgrading
+		// replaces every row with the actual filesystem clock exactly once.
+		if _, err := tx.Exec(`UPDATE notes SET mtime = 0`); err != nil {
+			return err
+		}
+	}
+	if existed {
+		if _, err := tx.Exec(`UPDATE index_meta SET value = '1' WHERE key = 'calibrated'`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (ix *Index) Calibrated() bool {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	var value string
+	return ix.db.QueryRow(`SELECT value FROM index_meta WHERE key = 'calibrated'`).Scan(&value) == nil && value == "1"
+}
+
+func (ix *Index) setCalibrated(ready bool) error {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	value := "0"
+	if ready {
+		value = "1"
+	}
+	_, err := ix.db.Exec(`INSERT INTO index_meta(key, value) VALUES('calibrated', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, value)
+	return err
 }
 
 func (ix *Index) Close() error {
@@ -82,6 +230,21 @@ func (ix *Index) Close() error {
 		return nil
 	}
 	return ix.db.Close()
+}
+
+// IntegrityCheck verifies the disposable index. A failed check is a signal to
+// discard and rebuild the cache; Markdown files remain the source of truth.
+func (ix *Index) IntegrityCheck() error {
+	ix.mu.Lock()
+	defer ix.mu.Unlock()
+	var result string
+	if err := ix.db.QueryRow(`PRAGMA quick_check`).Scan(&result); err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(result)) != "ok" {
+		return fmt.Errorf("index integrity check: %s", result)
+	}
+	return nil
 }
 
 // Reset drops everything. Used when the vault changes or the index is corrupt.
@@ -92,9 +255,23 @@ func (ix *Index) Reset() error {
 		DROP TRIGGER IF EXISTS notes_ai;
 		DROP TRIGGER IF EXISTS notes_ad;
 		DROP TRIGGER IF EXISTS notes_au;
+		DROP TRIGGER IF EXISTS notes_stats_ai;
+		DROP TRIGGER IF EXISTS notes_stats_ad;
+		DROP TRIGGER IF EXISTS notes_stats_au;
 		DROP TABLE IF EXISTS notes_fts;
+		DROP TABLE IF EXISTS note_tags;
+		DROP TABLE IF EXISTS folder_cache;
+		DROP TABLE IF EXISTS folder_counts;
+		DROP TABLE IF EXISTS index_stats;
+		DROP TABLE IF EXISTS index_meta;
 		DROP TABLE IF EXISTS notes;
 	` + schema)
+	if err == nil {
+		_, err = ix.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion))
+	}
+	if err == nil {
+		_, err = ix.db.Exec(`UPDATE index_meta SET value = '0' WHERE key = 'calibrated'`)
+	}
 	return err
 }
 
@@ -103,6 +280,13 @@ func (ix *Index) Reset() error {
 // Sync brings the index in line with what is on disk. It stats every note
 // first and only re-reads the ones whose size or mtime moved.
 func (ix *Index) Sync(v *store.Vault) (changed int, err error) {
+	return ix.SyncWithProgress(v, nil)
+}
+
+// SyncWithProgress is the explicit full-disk reconciliation path. Watcher
+// events normally use SyncChanges; this method is reserved for first build,
+// background calibration, overflow recovery and manual rebuild.
+func (ix *Index) SyncWithProgress(v *store.Vault, progress func(done, total int)) (changed int, err error) {
 	stats, err := v.StatWalk()
 	if err != nil {
 		return 0, err
@@ -162,7 +346,21 @@ func (ix *Index) Sync(v *store.Vault) (changed int, err error) {
 	}
 
 	if len(stale) == 0 && len(gone) == 0 {
-		return 0, nil
+		if progress != nil {
+			progress(0, 0)
+		}
+		folders, folderErr := v.Folders()
+		if folderErr != nil {
+			return 0, folderErr
+		}
+		if err := ix.ReplaceFolders(folders); err != nil {
+			return 0, err
+		}
+		return 0, ix.setCalibrated(true)
+	}
+	total := len(stale) + len(gone)
+	if progress != nil {
+		progress(0, total)
 	}
 
 	// Notes are read and committed in batches. Loading a whole vault into one
@@ -192,9 +390,25 @@ func (ix *Index) Sync(v *store.Vault) (changed int, err error) {
 			return changed, err
 		}
 		changed += len(notes)
+		if progress != nil {
+			progress(changed, total)
+		}
 	}
 	if err := ix.removePaths(gone); err != nil {
 		return changed, err
+	}
+	if progress != nil {
+		progress(changed+len(gone), total)
+	}
+	folders, folderErr := v.Folders()
+	if folderErr != nil {
+		return changed + len(gone), folderErr
+	}
+	if err := ix.ReplaceFolders(folders); err != nil {
+		return changed + len(gone), err
+	}
+	if err := ix.setCalibrated(true); err != nil {
+		return changed + len(gone), err
 	}
 	return changed + len(gone), nil
 }
@@ -221,7 +435,7 @@ func (ix *Index) upsert(notes []store.Note, onlyIfNewer bool) error {
 	}
 	defer tx.Rollback()
 
-	sqlText := `
+	const upsertSQL = `
 		INSERT INTO notes(id, path, title, folder, tags, created, updated, favorite, excerpt, words, size, mtime, content)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(path) DO UPDATE SET
@@ -229,6 +443,7 @@ func (ix *Index) upsert(notes []store.Note, onlyIfNewer bool) error {
 		  created=excluded.created, updated=excluded.updated, favorite=excluded.favorite,
 		  excerpt=excluded.excerpt, words=excluded.words, size=excluded.size,
 		  mtime=excluded.mtime, content=excluded.content`
+	sqlText := upsertSQL
 	if onlyIfNewer {
 		sqlText += ` WHERE excluded.mtime >= notes.mtime`
 	}
@@ -238,21 +453,114 @@ func (ix *Index) upsert(notes []store.Note, onlyIfNewer bool) error {
 		return err
 	}
 	defer stmt.Close()
+	var unconditionalStmt *sql.Stmt
+	if onlyIfNewer {
+		unconditionalStmt, err = tx.Prepare(upsertSQL)
+		if err != nil {
+			return err
+		}
+		defer unconditionalStmt.Close()
+	}
 
 	for _, n := range notes {
+		var previousFolder string
+		previousExists := tx.QueryRow(`SELECT folder FROM notes WHERE path = ?`, n.Path).Scan(&previousFolder) == nil
 		fav := 0
 		if n.Favorite {
 			fav = 1
 		}
-		if _, err := stmt.Exec(
+		args := []any{
 			n.ID, n.Path, n.Title, n.Folder, strings.Join(n.Tags, "\x1f"),
 			n.Created.UnixMilli(), n.Updated.UnixMilli(), fav,
-			n.Excerpt, n.Words, n.Size, n.Updated.UnixMilli(), n.Content,
-		); err != nil {
+			n.Excerpt, n.Words, n.Size, noteFileMtime(n), n.Content,
+		}
+		result, err := stmt.Exec(args...)
+		if err != nil {
 			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 && onlyIfNewer {
+			// A restored or copied file may legitimately carry an older mtime
+			// than the row it replaces. Before overriding that row, verify that
+			// the file still matches the exact note this sync pass read. If an
+			// in-app save landed in between, its file state differs and its
+			// authoritative Upsert will run after this mutex is released.
+			info, statErr := os.Stat(n.Path)
+			if statErr != nil || info.IsDir() || info.Size() != n.Size || info.ModTime().UnixMilli() != noteFileMtime(n) {
+				continue
+			}
+			result, err = unconditionalStmt.Exec(args...)
+			if err != nil {
+				return err
+			}
+			affected, err = result.RowsAffected()
+			if err != nil {
+				return err
+			}
+		}
+		if affected == 0 {
+			continue
+		}
+		var rowID int64
+		if err := tx.QueryRow(`SELECT rowid FROM notes WHERE path = ?`, n.Path).Scan(&rowID); err != nil {
+			return err
+		}
+		if err := replaceTagRows(tx, rowID, n.Tags); err != nil {
+			return err
+		}
+		if err := ensureFolderRowsTx(tx, n.Folder); err != nil {
+			return err
+		}
+		if !previousExists {
+			if err := adjustFolderCountsTx(tx, n.Folder, 1); err != nil {
+				return err
+			}
+		} else if previousFolder != n.Folder {
+			if err := adjustFolderCountsTx(tx, previousFolder, -1); err != nil {
+				return err
+			}
+			if err := adjustFolderCountsTx(tx, n.Folder, 1); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()
+}
+
+func noteFileMtime(n store.Note) int64 {
+	if !n.FileModTime.IsZero() {
+		return n.FileModTime.UnixMilli()
+	}
+	// Tests and narrow internal callers may construct a Note directly. The
+	// logical timestamp is a compatibility fallback, never the normal vault path.
+	return n.Updated.UnixMilli()
+}
+
+func replaceTagRows(tx *sql.Tx, rowID int64, tags []string) error {
+	if _, err := tx.Exec(`DELETE FROM note_tags WHERE note_rowid = ?`, rowID); err != nil {
+		return err
+	}
+	for _, tag := range tags {
+		if strings.TrimSpace(tag) == "" {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO note_tags(note_rowid, tag) VALUES(?, ?)`, rowID, tag); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func refreshSummaryTx(tx *sql.Tx) error {
+	_, err := tx.Exec(`UPDATE index_stats SET
+		notes = (SELECT COUNT(*) FROM notes),
+		words = (SELECT COALESCE(SUM(words), 0) FROM notes),
+		bytes = (SELECT COALESCE(SUM(size), 0) FROM notes)
+		WHERE singleton = 1`)
+	return err
 }
 
 // Upsert indexes a single note right after it was saved. The caller has the
@@ -271,8 +579,15 @@ func (ix *Index) removePaths(paths []string) error {
 	}
 	defer tx.Rollback()
 	for _, p := range paths {
+		var folder string
+		hadRow := tx.QueryRow(`SELECT folder FROM notes WHERE path = ?`, p).Scan(&folder) == nil
 		if _, err := tx.Exec(`DELETE FROM notes WHERE path = ?`, p); err != nil {
 			return err
+		}
+		if hadRow {
+			if err := adjustFolderCountsTx(tx, folder, -1); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()
@@ -292,10 +607,42 @@ func (ix *Index) RemoveUnder(folder string) error {
 	}
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
-	_, err := ix.db.Exec(
+	tx, err := ix.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query(`SELECT folder, COUNT(*) FROM notes WHERE folder = ? OR folder LIKE ? ESCAPE '\' GROUP BY folder`, folder, escapeLike(folder)+`/%`)
+	if err != nil {
+		return err
+	}
+	counts := map[string]int{}
+	for rows.Next() {
+		var path string
+		var count int
+		if err := rows.Scan(&path, &count); err != nil {
+			rows.Close()
+			return err
+		}
+		counts[path] = count
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
 		`DELETE FROM notes WHERE folder = ? OR folder LIKE ? ESCAPE '\'`,
-		folder, escapeLike(folder)+`/%`)
-	return err
+		folder, escapeLike(folder)+`/%`); err != nil {
+		return err
+	}
+	for path, count := range counts {
+		if err := adjustFolderCountsTx(tx, path, -count); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM folder_cache WHERE path = ? OR path LIKE ? ESCAPE '\'`, folder, escapeLike(folder)+`/%`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ---------------------------------------------------------------- queries
@@ -309,32 +656,7 @@ type Query struct {
 }
 
 func (ix *Index) List(q Query) ([]store.Meta, error) {
-	where := []string{"1=1"}
-	args := []any{}
-
-	switch q.Scope {
-	case "favorites":
-		where = append(where, "favorite = 1")
-	case "folder":
-		if q.Value != "" {
-			where = append(where, `(folder = ? OR folder LIKE ? ESCAPE '\')`)
-			args = append(args, q.Value, escapeLike(q.Value)+"/%")
-		}
-	case "tag":
-		// An empty tag is not a filter for untagged notes; without this guard
-		// the equality below quietly matches every note that has no tags.
-		if q.Value == "" {
-			return []store.Meta{}, nil
-		}
-		// Tags are stored as a unit-separated list, so membership is three
-		// LIKE patterns. Wildcards inside the tag itself have to be escaped or
-		// a tag named "a_b" also matches "axb".
-		esc := escapeLike(q.Value)
-		where = append(where, `(tags = ? OR tags LIKE ? ESCAPE '\' OR tags LIKE ? ESCAPE '\' OR tags LIKE ? ESCAPE '\')`)
-		args = append(args, q.Value, esc+"\x1f%", "%\x1f"+esc, "%\x1f"+esc+"\x1f%")
-	case "untagged":
-		where = append(where, "tags = ''")
-	}
+	where, args := listWhere(q.Scope, q.Value)
 
 	order := "updated DESC"
 	switch q.SortBy {
@@ -422,37 +744,28 @@ func (ix *Index) Summary() (Summary, error) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	var s Summary
-	err := ix.db.QueryRow(
-		`SELECT COUNT(*), COALESCE(SUM(words), 0), COALESCE(SUM(size), 0) FROM notes`,
-	).Scan(&s.Notes, &s.Words, &s.Bytes)
+	err := ix.db.QueryRow(`SELECT notes, words, bytes FROM index_stats WHERE singleton = 1`).Scan(&s.Notes, &s.Words, &s.Bytes)
 	return s, err
 }
 
 func (ix *Index) Tags() ([]store.Tag, error) {
 	ix.mu.Lock()
-	rows, err := ix.db.Query(`SELECT tags FROM notes WHERE tags <> ''`)
+	rows, err := ix.db.Query(`SELECT tag, COUNT(*) FROM note_tags GROUP BY tag ORDER BY COUNT(*) DESC, tag ASC`)
 	ix.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	counts := map[string]int{}
+	out := []store.Tag{}
 	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
-			continue
+		var tag store.Tag
+		if err := rows.Scan(&tag.Name, &tag.Count); err != nil {
+			return nil, err
 		}
-		for _, name := range splitTags(t) {
-			counts[name]++
-		}
+		out = append(out, tag)
 	}
-	out := make([]store.Tag, 0, len(counts))
-	for name, c := range counts {
-		out = append(out, store.Tag{Name: name, Count: c})
-	}
-	sortTags(out)
-	return out, nil
+	return out, rows.Err()
 }
 
 // sortTags orders by popularity, then by name so the sidebar stays stable.
