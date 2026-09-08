@@ -1,235 +1,83 @@
-# 巧记
+<p align="center">
+  <img src="frontend/src/assets/mark.png" width="64" height="64" alt="巧记">
+</p>
+
+<h1 align="center">巧记</h1>
+
+<p align="center">面向 Windows 的本地 Markdown 编辑器。打开文件，就能写。</p>
 
 <p align="center">
-  <img src="frontend/src/assets/mark.png" width="72" alt="巧记 logo">
+  <a href="https://github.com/7788dev/qiaoji/releases/latest"><img src="https://img.shields.io/github/v/release/7788dev/qiaoji?style=flat-square" alt="最新版本"></a>
+  <a href="https://github.com/7788dev/qiaoji/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/7788dev/qiaoji/release.yml?style=flat-square&label=build" alt="构建状态"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/7788dev/qiaoji?style=flat-square" alt="MIT License"></a>
 </p>
 
 <p align="center">
-  A focused, local-first Markdown notebook for Windows.<br>
-  Your notes stay as portable <code>.md</code> files on disk.
-</p>
-
-<p align="center">
-  <a href="https://github.com/7788dev/qiaoji/releases"><img src="https://img.shields.io/github/v/release/7788dev/qiaoji?style=flat-square" alt="Latest release"></a>
-  <a href="https://github.com/7788dev/qiaoji/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/7788dev/qiaoji/release.yml?style=flat-square&label=build" alt="Build status"></a>
-  <a href="https://github.com/7788dev/qiaoji/blob/main/LICENSE"><img src="https://img.shields.io/github/license/7788dev/qiaoji?style=flat-square" alt="License"></a>
-</p>
-
-<p align="center">
-  <a href="#安装">安装</a> ·
-  <a href="#快速开始">快速开始</a> ·
-  <a href="#功能">功能</a> ·
-  <a href="#数据与安全">数据与安全</a> ·
-  <a href="#从源码构建">开发</a> ·
-  <a href="#参与贡献">贡献</a>
+  <a href="https://github.com/7788dev/qiaoji/releases/latest">下载</a> ·
+  <a href="docs/guide.md">使用指南</a> ·
+  <a href="docs/screenshots.md">界面预览</a> ·
+  <a href="CHANGELOG.md">更新日志</a> ·
+  <a href="CONTRIBUTING.md">参与贡献</a>
 </p>
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="UI/screenshots/readme-dark.png">
-    <img src="UI/screenshots/readme-light.png" alt="巧记浅色主题主界面" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="UI/screenshots/writing-dark-1280x800.jpg">
+    <img src="UI/screenshots/writing-light-1280x800.jpg" width="960" alt="巧记写作界面：左侧文件树，右侧直接编辑 Markdown 正文">
   </picture>
 </p>
 
-<p align="center"><sub>真实运行界面 · 1440 × 960 · Windows WebView2</sub></p>
-
-<p align="center">
-  <img src="UI/screenshots/readme-preview.png" alt="Markdown 预览与数学公式" width="49%">
-  <img src="UI/screenshots/readme-compact.png" alt="紧凑窗口布局" width="49%">
-</p>
-
-<p align="center">
-  <img src="UI/screenshots/readme-command-palette.png" alt="命令面板" width="49%">
-  <img src="UI/screenshots/readme-export.png" alt="多格式导出" width="49%">
-</p>
-
-## 项目定位
-
-巧记是一款 Windows-first 的本地 Markdown 笔记应用，面向需要快速记录、整理和长期保有数据的个人用户。
-它把笔记保存为普通文件，把搜索和统计作为可重建的本地索引，因此不依赖云端账户，也不会把内容锁在专有数据库里。
+<p align="center"><sub>Windows 实际运行界面 · 100% 应用缩放 · 16px 正文</sub></p>
 
 ## 安装
 
-### Windows 安装包
+从 [GitHub Releases](https://github.com/7788dev/qiaoji/releases/latest) 下载 `Qiaoji-<版本>-windows-amd64-setup.exe` 并运行。默认安装到当前用户，无需管理员权限。
 
-1. 从 [Releases](https://github.com/7788dev/qiaoji/releases) 下载最新的 `Qiaoji-<version>-windows-amd64-setup.exe`。
-2. 下载同一版本的 `SHA256SUMS.txt`，按下面的命令校验安装包。
-3. 运行安装程序。安装范围默认为当前用户，不需要管理员权限。
-
-```powershell
-Get-FileHash .\Qiaoji-<version>-windows-amd64-setup.exe -Algorithm SHA256
-Get-Content .\SHA256SUMS.txt
-```
-
-系统要求：
-
-| 项目 | 要求 |
-| --- | --- |
-| 操作系统 | Windows 10 或 Windows 11，64 位 |
-| WebView | [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) |
-| 安装权限 | 用户级安装不需要管理员权限 |
-
-> 安装包目前未使用商业代码签名。请只从本仓库 Releases 下载，并在运行前核对 SHA-256。
-
-## 快速开始
-
-1. 启动巧记，在首次欢迎页确认或更改笔记库目录。
-2. 按 `Ctrl + N` 创建笔记，输入 Markdown 内容。
-3. 使用侧栏的文件夹、标签、收藏和最近使用组织内容。
-4. 按 `Ctrl + Shift + F` 搜索整个笔记库。
-5. 使用 `Ctrl + Shift + E` 将当前笔记导出为所需格式。
-
-笔记库可以随时用资源管理器、Git 或其他编辑器打开；巧记不会阻止外部工具访问这些 `.md` 文件。
+支持 **Windows 10 / 11（64 位）**，需要 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。每个版本附带 `SHA256SUMS.txt`，可用 PowerShell 的 `Get-FileHash <安装包路径> -Algorithm SHA256` 核对。
 
 ## 功能
 
-### 编辑与预览
+- **直接写作**：标题、列表、任务项、表格、代码和公式在正文中呈现；随时切换完整 Markdown 源码。
+- **本地文件**：新建草稿，打开任意位置的 `.md` 文件或文件夹，无需导入笔记库。
+- **手动保存**：`Ctrl+S` 写入磁盘；关闭前确认未保存修改，外部修改冲突保留编辑内容。
+- **轻量导航**：文件树与大纲共用侧栏，支持全文搜索、查找替换和多标签；每篇文档保留独立撤销记录。
+- **图片与导出**：粘贴图片随保存写入 `assets/`；支持 HTML、PDF、Word、纯文本导出和 Markdown 另存为。
+- **阅读排版**：深浅主题、可调字号与正文宽度；窄窗口使用抽屉侧栏。
 
-- CodeMirror 6 编辑器，支持 Markdown、代码块、任务清单、表格和快捷键。
-- 编辑与渲染预览可一键切换，支持实时预览或手动刷新。
-- KaTeX 渲染行内与块级数学公式。
-- 代码高亮按语言按需加载，减少首屏负担。
+## 快速开始
 
-### 组织与搜索
+1. 启动后直接输入，按 `Ctrl+S` 选择文件位置。
+2. 按 `Ctrl+O` 打开文件，或用 `Ctrl+Shift+O` 浏览文件夹。
+3. 按 `Ctrl+/` 切换可视化与源码；格式操作在顶部「格式」菜单中。
 
-- 文件夹、标签、收藏、最近使用和回收站。
-- SQLite FTS5 全文搜索，结果带上下文片段和高亮。
-- 列表和网格视图、标题/创建时间/更新时间排序。
-- 命令面板统一访问笔记操作、视图切换和设置。
+默认手动保存。切换标签、编辑模式或窗口焦点不会保存文件。下次启动恢复已保存文档、当前标签和阅读位置。
 
-### 文件与导出
+完整快捷键、图片处理和冲突处理见 [使用指南](docs/guide.md)。
 
-- 粘贴或拖入 PNG、JPEG、GIF、WebP 图片，附件保存到笔记旁的 `assets/`。
-- 导出 Markdown、HTML、PDF、Word 和纯文本。
-- HTML/PDF 使用当前预览内容，PDF 通过应用内 WebView2 排版。
-- 删除操作进入可恢复回收站，支持撤销；删除文件夹会同时保留其中附件。
+## 文件兼容
 
-### 可靠性与体验
+文档始终是普通 Markdown 文件。巧记不自动添加元数据，也不根据标题重命名文件；已有 front matter 会保留。仅打开、切换模式或无修改保存不会重写文件。
 
-- 自动保存带串行写入队列，不会让并发保存覆盖较新的编辑。
-- 检测外部修改并进入冲突流程，避免静默覆盖磁盘版本。
-- 文件夹重命名会保持当前筛选路径，非法或空名称会被拦截。
-- 搜索索引、统计和诊断数据均为本地可重建缓存，不上传笔记内容。
+实际进行可视化编辑后，正文可能规范化为等价 Markdown。原始 HTML 和不能可靠转换的语法使用源码模式保留。旧版笔记、附件和回收站仍可使用。
 
-## 数据与安全
+偏好与搜索缓存位于 `%APPDATA%\巧记`。打开文件夹不会生成示例文件；图片和回收站按需创建在文档所在目录。详见 [文件与数据](docs/guide.md#文件与数据)。
 
-巧记不要求登录，也不把笔记正文发送到网络服务。默认目录结构如下：
+## 开发
 
-```text
-%USERPROFILE%\Documents\巧记\       笔记库，可在设置中更改
-├─ *.md                              Markdown 笔记
-├─ <folder>\                         用户文件夹
-├─ <note-folder>\assets\             笔记附件
-└─ .qiaoji\
-   ├─ trash\                         可恢复回收站
-   ├─ vault.json                     笔记库初始化标记
-   └─ ...                             应用内部临时数据
-
-%APPDATA%\巧记\settings.json         窗口、主题和导出设置
-```
-
-每篇笔记使用 YAML front matter 保存 `id`、`title`、`tags`、`created`、`updated` 和 `favorite` 等元数据。
-无法解析的 front matter 会拒绝写入，以保护原文件。搜索索引只服务于本地检索，删除后会自动重建。
-
-## 快捷键
-
-| 操作 | 快捷键 | 操作 | 快捷键 |
-| --- | --- | --- | --- |
-| 新建笔记 | `Ctrl + N` | 加粗 | `Ctrl + B` |
-| 保存 | `Ctrl + S` | 斜体 | `Ctrl + I` |
-| 导出 | `Ctrl + Shift + E` | 行内代码 | `Ctrl + E` |
-| 关闭当前标签 | `Ctrl + W` | 插入链接 | `Ctrl + K` |
-| 查找 / 替换 | `Ctrl + F` / `Ctrl + H` | 任务项 | `Ctrl + Shift + L` |
-| 全文搜索 | `Ctrl + Shift + F` | 标题一至四级 | `Ctrl + 1` … `Ctrl + 4` |
-| 命令面板 | `Ctrl + Shift + P` | 预览切换 | `Ctrl + P` |
-| 设置 | `Ctrl + ,` | 侧边栏 | `Ctrl + \` |
-| 快捷键一览 | `Ctrl + /` | | |
-
-## 从源码构建
-
-### 环境要求
-
-- Go 1.25+
-- Node.js 20.19+
-- Wails v2.13.0
-- Windows WebView2 Runtime
-- NSIS（仅构建安装包时需要）
-
-### 安装依赖
+使用 Go **1.25.13+**、Node.js **20.19+** 和 Wails **2.13.0**。
 
 ```powershell
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
 Push-Location frontend
 npm ci
 Pop-Location
-```
-
-### 本地开发
-
-```powershell
 wails dev
 ```
 
-### 质量检查
+编辑器基于 [Milkdown Crepe](https://milkdown.dev/) 7.22.1 和 [CodeMirror](https://codemirror.net/) 6，桌面运行时使用 [Wails](https://wails.io/)。项目结构、测试和安装包构建见 [贡献指南](CONTRIBUTING.md)；发布步骤见 [发布指南](docs/releasing.md)。
 
-```powershell
-go vet ./...
-go test ./...
-Push-Location frontend
-npx tsc --noEmit
-npm test
-npm run build
-Pop-Location
-```
-
-### 构建 Windows 安装包
-
-```powershell
-$env:CGO_ENABLED = "0"
-wails build -platform windows/amd64 -nsis -installscope user -trimpath `
-  -ldflags "-s -w -X qiaoji/internal/config.AppVersion=1.1.0"
-```
-
-输出位于 `build/bin/`。发布工作流会从 `vX.Y.Z` 标签读取版本、执行质量检查、生成安装包和 SHA-256 校验文件，并发布 GitHub Release。
-
-## 项目结构
-
-```text
-.
-├─ app.go, main.go, tray.go       Wails 应用壳与 Go 绑定
-├─ internal/store/                Markdown vault、front matter、回收站
-├─ internal/index/                SQLite FTS5 搜索索引与分页查询
-├─ internal/exporter/             Markdown / HTML / PDF / DOCX / TXT 导出
-├─ internal/watch/                文件变更监听与增量同步
-├─ frontend/src/                  TypeScript UI、编辑器和交互逻辑
-├─ frontend/wailsjs/              提交到仓库的生成绑定
-├─ UI/screenshots/                README 与 UI 验收截图
-└─ build/windows/                 Windows 图标、manifest 和 NSIS 配置
-```
-
-## 发布流程
-
-发布由 `.github/workflows/release.yml` 驱动：
-
-1. 创建并推送形如 `v1.2.3` 的版本标签。
-2. GitHub Actions 使用 Go、Node.js 和 Wails 构建 Windows 用户级安装包。
-3. 工作流运行 Go/TypeScript 质量门禁，生成 `SHA256SUMS.txt`。
-4. 安装包和校验文件发布到 GitHub Release。
-
-## 参与贡献
-
-欢迎提交 Issue 和 Pull Request。提交前请：
-
-1. 确认没有包含真实笔记、凭据、`node_modules` 或构建输出。
-2. 为行为变化补充聚焦测试，尤其是 Windows 路径、回收站和外部修改场景。
-3. 运行上面的质量检查，并在 PR 中说明用户可见变化和验证命令。
-4. UI 改动请附带前后截图，并保持现有 Windows-first 交互和视觉语言。
+问题反馈请提交 [Issue](https://github.com/7788dev/qiaoji/issues)，附上版本、复现步骤和不含个人数据的示例。界面改动与回归验证记录见 [写作体验验收](docs/writing-experience-acceptance.md)。
 
 ## 许可证
 
-[MIT License](LICENSE)
-
-## 项目链接
-
-- [最新 Release](https://github.com/7788dev/qiaoji/releases)
-- [Issue tracker](https://github.com/7788dev/qiaoji/issues)
+[MIT](LICENSE)
