@@ -1,4 +1,4 @@
-# 写作体验验收：1.1.0
+# 写作体验验收：1.1.1
 
 日期：2026-09-08。桌面验证使用独立的临时 APPDATA 和合成 Markdown 文件，没有使用个人笔记。此前的安全与性能修复一并保留。
 
@@ -23,13 +23,15 @@
 | `npm test` | 16 个测试文件，115 项通过 |
 | `npm run build` | 通过；最终 Wails 构建亦执行 `tsc && vite build` |
 | `go vet ./...` | 通过 |
-| `go test ./...` | 全部通过 |
-| Windows amd64 Wails / NSIS 构建 | 通过，`Qiaoji-1.1.0-windows-amd64-setup.exe`；应用文件版本与产品版本均为 1.1.0 |
+| `go test -count=1 ./...` | 全部通过；不复用测试缓存，索引包约 261 秒，包含两万篇文档测试 |
+| Windows amd64 Wails / NSIS 构建 | 通过，`Qiaoji-1.1.1-windows-amd64-setup.exe`；应用文件版本与产品版本均为 1.1.1 |
 | `git diff --check` | 通过 |
 
 新增回归覆盖手动保存、草稿与库外文件、另存为取消与失败、延迟写入期间的新编辑、退出确认超过 8 秒、每个标签独立撤销与选区、中文组合输入期间不提前序列化、空任务项继续输入、front matter 和未知语法、中文路径、图片暂存与跨目录复制、图片说明保真、只读文件无修改保存、外部冲突、文件恢复失败、独立文件回收站恢复，以及文件导航成功／取消／失败时的抽屉行为。
 
 缩放恢复回归确认：150% 可恢复到 100%，不修改正文或写入文件、不重置用户正文字号；Ctrl+0 仍执行普通段落格式，中文组合输入时不触发缩放快捷键。
+
+Windows 路径回归使用真实 8.3 短名称，覆盖长／短路径浏览、同一文件身份、中文文件名、尚未创建的保存目标、越界访问与内部目录隔离。路径规范化在一次操作内复用，文档读取由 `notePath` 统一校验，避免大目录扫描反复查询相同路径。
 
 ## Windows WebView2 验证
 
@@ -55,15 +57,36 @@
 
 真实中文输入法的候选框定位、连续选字与删除仍需人工确认。自动测试覆盖 composition 状态，桌面已验证 Unicode 中文输入；这两项不等同于真实输入法验收。150% 应用缩放已验证，Windows 系统 DPI 未单独切换验证。
 
-早期并行验收构建通过仓库外 Go overlay 更换单实例测试标识，正式构建未使用 overlay。最终补充的缩放恢复已通过自动回归；其原生窗口复核受到前台全屏窗口占用影响，未完成新的截图采集。以下截图来自本次改版此前的独立 WebView2 验收，默认布局与字号未再调整。
+早期验收构建通过仓库外 Go overlay 更换单实例测试标识，正式构建未使用 overlay。最终补充的缩放恢复已通过自动回归；其原生窗口复核受到前台全屏窗口占用影响。下方保留此前独立 WebView2 验收记录，新版展示截图的采集方式单独列出。
 
 ## 截图
 
-默认界面以单张完整图片展示，见 [界面预览](screenshots.md)。以下保留行为验证与历史对照，150% 图片仅表示缩放测试场景。
+### 当前展示图片
+
+[界面预览](screenshots.md) 中的 PNG 来自 Windows Edge 渲染的真实 Wails 前端，连接独立测试配置下的 Go 后端。应用缩放为 100%，正文为 16px，字体加载完成后采集。它们用于展示当前布局，不作为新的 WebView2 或系统 DPI 验收证据。
+
+| 场景 | 界面尺寸 | 原始 PNG 像素 | 加框后像素 |
+| --- | --- | --- | --- |
+| [浅色](../UI/screenshots/writing-light.png)、[深色](../UI/screenshots/writing-dark.png)、[源码](../UI/screenshots/writing-source.png) | 1280×800 | 3840×2400 | 3984×2544 |
+| [小窗口](../UI/screenshots/writing-narrow.png) | 900×600 | 2700×1800 | 2844×1944 |
+| [正文细节](../UI/screenshots/writing-detail.png) | 浅色原图局部 | 2424×840 | 2568×984 |
+
+采集时临时隐藏浏览器扩展悬浮图标与自动化光标，应用内容保持原样。后期保留截图像素，仅添加一致的外边距、细边框与轻微阴影。正文细节直接裁取原图。所有展示图保存为无损 PNG，每个场景独立成行，并提供原图链接。
+
+准备上述尺寸的原始截图 `writing-light.png`、`writing-dark.png`、`writing-source.png`、`writing-narrow.png` 后，可用 [处理脚本](../tools/prepare_screenshots.py) 复现边框与裁切：
+
+```powershell
+# Python 环境需安装 Pillow
+python tools/prepare_screenshots.py <原始截图目录>
+```
+
+### 原生验收与历史对照
+
+以下 JPG 来自本次改版较早的独立 WebView2 验收，仅保留为行为验证记录；150% 图片表示缩放测试场景。
 
 改版前：[浅色三栏布局](../UI/screenshots/refactor-light.png)、[深色布局](../UI/screenshots/refactor-dark.png)。
 
-改版后：[1280×800 浅色](../UI/screenshots/writing-light-1280x800.jpg)、[1280×800 深色](../UI/screenshots/writing-dark-1280x800.jpg)、[完整源码](../UI/screenshots/writing-source.jpg)、[首次启动](../UI/screenshots/writing-first-launch.jpg)、[关闭确认](../UI/screenshots/writing-close-confirm.jpg)、[源码保留](../UI/screenshots/writing-source-preservation.jpg)。
+改版后原生记录：[1280×800 浅色](../UI/screenshots/writing-light-1280x800.jpg)、[1280×800 深色](../UI/screenshots/writing-dark-1280x800.jpg)、[完整源码](../UI/screenshots/writing-source.jpg)、[首次启动](../UI/screenshots/writing-first-launch.jpg)、[关闭确认](../UI/screenshots/writing-close-confirm.jpg)、[源码保留](../UI/screenshots/writing-source-preservation.jpg)。
 
 小窗口与缩放：[900×600 标准缩放](../UI/screenshots/writing-900x600.jpg)、[900×600 / 150% 应用缩放](../UI/screenshots/writing-900x600-150.jpg)、[150% 抽屉文件树](../UI/screenshots/writing-drawer-150.jpg)。截图尺寸按桌面自动化工具返回的逻辑像素记录，系统 DPI 会影响实际物理像素尺寸。
 

@@ -21,13 +21,15 @@
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="UI/screenshots/writing-dark-1280x800.jpg">
-    <img src="UI/screenshots/writing-light-1280x800.jpg" width="960" alt="巧记写作界面：左侧文件树，右侧直接编辑 Markdown 正文">
-  </picture>
+  <a href="docs/screenshots.md">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="UI/screenshots/writing-dark.png">
+      <img src="UI/screenshots/writing-light.png" width="1280" alt="巧记写作界面：左侧文件树，右侧直接编辑 Markdown 正文，点击查看高清原图与细节">
+    </picture>
+  </a>
 </p>
 
-<p align="center"><sub>Windows 实际运行界面 · 100% 应用缩放 · 16px 正文</sub></p>
+<p align="center"><sub>100% 应用缩放 · 16px 正文 · <a href="docs/screenshots.md">高清原图与排版细节</a></sub></p>
 
 ## 安装
 
