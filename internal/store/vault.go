@@ -313,9 +313,7 @@ func (v *Vault) notePath(abs string) (string, os.FileInfo, error) {
 func (v *Vault) Read(abs string) (Note, error) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	if _, ok := resolveUserPath(v.root, abs, false); !ok {
-		return Note{}, ErrNotFound
-	}
+	// readNote validates the path through notePath before reading any bytes.
 	return v.readNote(abs)
 }
 

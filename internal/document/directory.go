@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"qiaoji/internal/store"
 )
 
 type Entry struct {
@@ -27,11 +29,15 @@ func ListDirectory(root, path, cursor string) (DirectoryPage, error) {
 	if path == "" {
 		path = root
 	}
-	root, err := filepath.EvalSymlinks(root)
+	root, err := store.AbsolutePath(root)
 	if err != nil {
 		return result, err
 	}
-	path, err = filepath.Abs(path)
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return result, err
+	}
+	path, err = store.AbsolutePath(path)
 	if err != nil {
 		return result, err
 	}
@@ -44,7 +50,7 @@ func ListDirectory(root, path, cursor string) (DirectoryPage, error) {
 		return result, errors.New("文件夹不在当前目录内")
 	}
 	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
-		if part == ".qiaoji" {
+		if strings.EqualFold(part, ".qiaoji") {
 			return result, errors.New("内部目录不可浏览")
 		}
 	}

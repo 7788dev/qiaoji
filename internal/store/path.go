@@ -11,22 +11,13 @@ import (
 // lexical check rejects .. escapes, while the symlink check prevents a link
 // inside the vault from redirecting an operation to another volume or folder.
 // Missing final components are allowed for create/rename destinations when the
-// existing parent can still be resolved safely.
-func resolveVaultPath(root, target string, allowMissing bool) (string, bool) {
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return "", false
-	}
+// existing parent can still be resolved safely. Both paths must already have
+// absolute, long-name spellings, without resolving their symbolic links.
+func resolveVaultPath(rootAbs, targetAbs string, allowMissing bool) (string, bool) {
 	rootInfo, err := os.Lstat(rootAbs)
 	if err != nil || rootInfo.Mode()&os.ModeSymlink != 0 {
 		return "", false
 	}
-	targetAbs, err := filepath.Abs(target)
-	if err != nil {
-		return "", false
-	}
-	rootAbs = filepath.Clean(rootAbs)
-	targetAbs = filepath.Clean(targetAbs)
 	if !lexicallyWithin(rootAbs, targetAbs) {
 		return "", false
 	}
@@ -70,8 +61,18 @@ func resolveVaultPath(root, target string, allowMissing bool) (string, bool) {
 // a user can create `alias -> .qiaoji` and otherwise reach the index/trash via
 // a path that looks ordinary.
 func resolveUserPath(root, target string, allowMissing bool) (string, bool) {
-	resolved, ok := resolveVaultPath(root, target, allowMissing)
-	if !ok || isInternalPath(root, target) || isInternalPath(root, resolved) || hasSymlinkComponent(root, target) {
+	// Expand Windows aliases once per operation. Repeating that filesystem
+	// lookup for each boundary check makes large directory scans needlessly slow.
+	rootAbs, err := AbsolutePath(root)
+	if err != nil {
+		return "", false
+	}
+	targetAbs, err := AbsolutePath(target)
+	if err != nil {
+		return "", false
+	}
+	resolved, ok := resolveVaultPath(rootAbs, targetAbs, allowMissing)
+	if !ok || isInternalAbsolutePath(rootAbs, targetAbs) || isInternalAbsolutePath(rootAbs, resolved) || hasSymlinkComponent(rootAbs, targetAbs) {
 		return "", false
 	}
 	return resolved, true
@@ -86,14 +87,18 @@ func lexicallyWithin(root, target string) bool {
 }
 
 func isInternalPath(root, target string) bool {
-	rootAbs, err := filepath.Abs(root)
+	rootAbs, err := AbsolutePath(root)
 	if err != nil {
 		return true
 	}
-	targetAbs, err := filepath.Abs(target)
+	targetAbs, err := AbsolutePath(target)
 	if err != nil {
 		return true
 	}
+	return isInternalAbsolutePath(rootAbs, targetAbs)
+}
+
+func isInternalAbsolutePath(rootAbs, targetAbs string) bool {
 	rel, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(targetAbs))
 	if err != nil {
 		return true
@@ -108,17 +113,13 @@ func isInternalPath(root, target string) bool {
 // the resolved result. This intentionally rejects even a link that points back
 // into the vault: an alias can be retargeted between validation and use, and
 // allowing it makes watcher/index paths ambiguous. Missing leaf components are
-// fine; every existing parent must still be an ordinary directory.
-func hasSymlinkComponent(root, target string) bool {
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return true
-	}
+// fine; every existing parent must still be an ordinary directory. Inputs have
+// absolute, long-name spellings from resolveUserPath.
+func hasSymlinkComponent(rootAbs, targetAbs string) bool {
 	if info, statErr := os.Lstat(rootAbs); statErr != nil || info.Mode()&os.ModeSymlink != 0 {
 		return true
 	}
-	targetAbs, err := filepath.Abs(target)
-	if err != nil || !lexicallyWithin(rootAbs, targetAbs) {
+	if !lexicallyWithin(rootAbs, targetAbs) {
 		return true
 	}
 	rel, err := filepath.Rel(filepath.Clean(rootAbs), filepath.Clean(targetAbs))
