@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -63,16 +64,68 @@ func renderFile(fm frontMatter, body string) []byte {
 	return out
 }
 
+// renderNoteFile is the last size and render-error check before a note is
+// replaced on disk. The body limit alone is insufficient because front matter
+// and preserved unknown YAML keys also contribute to the file size.
+func renderNoteFile(fm frontMatter, body string) ([]byte, error) {
+	data := renderFile(fm, body)
+	if data == nil {
+		return nil, errors.New("无法生成笔记内容")
+	}
+	if len(data) > maxNoteBytes {
+		return nil, fmt.Errorf("笔记超过 %d MB 限制", maxNoteBytes>>20)
+	}
+	return data, nil
+}
+
 func normaliseTags(in []string) []string {
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))
 	for _, t := range in {
 		t = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(t), "#"))
-		if t == "" || seen[t] {
+		if t == "" || seen[t] || len([]rune(t)) > maxTagRunes {
 			continue
 		}
 		seen[t] = true
 		out = append(out, t)
 	}
 	return out
+}
+
+func validateTags(in []string) error {
+	if len(in) > 100 {
+		return errors.New("标签数量过多")
+	}
+	total := 0
+	for _, raw := range in {
+		t := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "#"))
+		if t == "" {
+			continue
+		}
+		if err := ValidateTagName(t); err != nil {
+			return err
+		}
+		total += len([]byte(t))
+		if total > 16<<10 {
+			return errors.New("标签内容过大")
+		}
+	}
+	return nil
+}
+
+// ValidateTagName checks one normalized tag name for API callers that mutate
+// a whole set of notes, such as RenameTag.
+func ValidateTagName(tag string) error {
+	if strings.TrimSpace(tag) == "" {
+		return errors.New("标签名不能为空")
+	}
+	if len([]rune(tag)) > maxTagRunes {
+		return errors.New("标签名称过长")
+	}
+	for _, r := range tag {
+		if r < 0x20 || r == 0x7f {
+			return errors.New("标签包含非法控制字符")
+		}
+	}
+	return nil
 }

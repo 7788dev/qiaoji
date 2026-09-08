@@ -65,6 +65,7 @@ func (r Request) target() (string, error) {
 	}
 	name = sanitise(name)
 	name = strings.TrimSuffix(name, ext)
+	name = sanitise(name)
 
 	p := filepath.Join(r.Dir, name+ext)
 	for i := 2; fileExists(p) && i < 1000; i++ {
@@ -91,10 +92,23 @@ func sanitise(name string) string {
 	if r := []rune(s); len(r) > 120 {
 		s = string(r[:120])
 	}
-	if s == "" {
+	if s == "" || isReservedWindowsName(s) {
 		s = "未命名笔记"
 	}
 	return s
+}
+
+func isReservedWindowsName(name string) bool {
+	base := strings.TrimRight(strings.TrimSpace(name), ".")
+	if dot := strings.IndexByte(base, '.'); dot >= 0 {
+		base = base[:dot]
+	}
+	switch strings.ToLower(base) {
+	case "con", "prn", "aux", "nul", "clock$", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9":
+		return true
+	default:
+		return false
+	}
 }
 
 // Run writes the file and returns its absolute path.
@@ -104,33 +118,104 @@ func Run(r Request) (string, error) {
 		return "", err
 	}
 
+	tmp, err := os.CreateTemp(filepath.Dir(out), ".qiaoji-export-*")
+	if err != nil {
+		return "", err
+	}
+	tmpName := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return "", err
+	}
+	_ = os.Remove(tmpName)
+	cleanup := func() { _ = os.Remove(tmpName) }
+	writeErr := func(err error) (string, error) {
+		cleanup()
+		return "", err
+	}
+
 	switch r.Format {
 	case FormatMarkdown:
-		return out, os.WriteFile(out, []byte(normaliseEOL(r.Markdown)), 0o644)
+		if err := os.WriteFile(tmpName, []byte(normaliseEOL(r.Markdown)), 0o644); err != nil {
+			return writeErr(err)
+		}
 
 	case FormatText:
-		return out, os.WriteFile(out, []byte(normaliseEOL(toPlainText(r.Markdown))), 0o644)
+		if err := os.WriteFile(tmpName, []byte(normaliseEOL(toPlainText(r.Markdown))), 0o644); err != nil {
+			return writeErr(err)
+		}
 
 	case FormatHTML:
 		doc, err := standaloneHTML(r)
 		if err != nil {
-			return "", err
+			return writeErr(err)
 		}
-		return out, os.WriteFile(out, []byte(doc), 0o644)
+		if err := os.WriteFile(tmpName, []byte(doc), 0o644); err != nil {
+			return writeErr(err)
+		}
 
 	case FormatPDF:
-		if err := writePDF(r, out); err != nil {
-			return "", err
+		if err := writePDF(r, tmpName); err != nil {
+			return writeErr(err)
 		}
-		return out, nil
 
 	case FormatDOCX:
-		if err := writeDOCX(r, out); err != nil {
-			return "", err
+		if err := writeDOCX(r, tmpName); err != nil {
+			return writeErr(err)
 		}
-		return out, nil
+
+	default:
+		return writeErr(fmt.Errorf("不支持的导出格式: %s", r.Format))
 	}
-	return "", fmt.Errorf("不支持的导出格式: %s", r.Format)
+	if err := replaceExportFile(tmpName, out); err != nil {
+		return writeErr(err)
+	}
+	cleanup()
+	return out, nil
+}
+
+func replaceExportFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return writeExportBytes(dst, data)
+}
+
+func writeExportBytes(dst string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".qiaoji-export-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		cleanup()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // normaliseEOL gives exported text files Windows line endings so Notepad and

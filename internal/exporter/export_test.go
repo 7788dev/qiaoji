@@ -404,6 +404,19 @@ func TestTargetSanitisesNames(t *testing.T) {
 	}
 }
 
+func TestTargetAvoidsWindowsReservedNames(t *testing.T) {
+	for _, name := range []string{"CON", "con.txt", "LPT1", "aux."} {
+		got, err := (Request{Format: FormatMarkdown, FileName: name, Dir: t.TempDir()}).target()
+		if err != nil {
+			t.Fatal(err)
+		}
+		base := strings.TrimSuffix(filepath.Base(got), ".md")
+		if strings.EqualFold(base, strings.TrimSuffix(name, ".txt")) {
+			t.Errorf("reserved name %q was not rewritten: %q", name, got)
+		}
+	}
+}
+
 func TestTargetRejectsUnknownFormat(t *testing.T) {
 	r := Request{Format: "rtf", Title: "x", Dir: t.TempDir()}
 	if _, err := r.target(); err == nil {

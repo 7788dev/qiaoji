@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -49,22 +50,67 @@ type Restored struct {
 
 func (v *Vault) trashRoot() string { return v.InternalPath("trash") }
 
+// safeEntryID reports whether a value may be used verbatim as a trash
+// directory name.
+//
+// A note id comes from YAML that a sync client, a shared vault or another text
+// editor wrote, so it is untrusted input. An id such as `../../loot` would
+// otherwise move the note out of the trash — with enough segments, out of the
+// vault — where ListTrash cannot see it and the user cannot get it back.
+func safeEntryID(value string) bool {
+	if value == "" || value == "." || value == ".." || len(value) > 120 {
+		return false
+	}
+	if value != filepath.Base(value) || value != filepath.Clean(value) {
+		return false
+	}
+	if filepath.IsAbs(value) || filepath.VolumeName(value) != "" {
+		return false
+	}
+	for _, r := range value {
+		if r == '/' || r == '\\' || r == ':' || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// isWithinDir reports whether child is dir itself or sits below it.
+func isWithinDir(dir, child string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(child))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // newTrashDir reserves a directory for one entry and returns it with the id it
 // ended up using.
+//
+// The directory is created with Mkdir rather than MkdirAll so an id that is
+// already taken is reported instead of reused: sharing a directory would
+// overwrite the earlier entry's meta.json and orphan its payload.
 func (v *Vault) newTrashDir(preferred string) (dir, entryID string, err error) {
 	entryID = preferred
-	if entryID == "" {
+	if !safeEntryID(entryID) {
 		entryID = newID()
 	}
-	dir = filepath.Join(v.trashRoot(), entryID)
-	if _, statErr := os.Stat(dir); statErr == nil {
-		entryID += "-" + newID()[:6]
-		dir = filepath.Join(v.trashRoot(), entryID)
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(v.trashRoot(), 0o755); err != nil {
 		return "", "", err
 	}
-	return dir, entryID, nil
+	for attempt := 0; attempt < 8; attempt++ {
+		dir = filepath.Join(v.trashRoot(), entryID)
+		if !isWithinDir(v.trashRoot(), dir) || filepath.Clean(dir) == filepath.Clean(v.trashRoot()) {
+			return "", "", errors.New("invalid trash entry")
+		}
+		if mkErr := os.Mkdir(dir, 0o755); mkErr == nil {
+			return dir, entryID, nil
+		} else if !os.IsExist(mkErr) {
+			return "", "", mkErr
+		}
+		entryID = newID()
+	}
+	return "", "", errors.New("无法在回收站中创建条目")
 }
 
 // writeTrashMeta records the entry before the payload moves, so a failure can
@@ -86,6 +132,7 @@ func (v *Vault) Trash(abs string) (TrashItem, error) {
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	abs = n.Path
 
 	rel, err := filepath.Rel(v.root, abs)
 	if err != nil {
@@ -112,7 +159,11 @@ func (v *Vault) Trash(abs string) (TrashItem, error) {
 		return TrashItem{}, err
 	}
 	if err := moveTree(abs, filepath.Join(dir, filepath.Base(abs))); err != nil {
-		_ = os.RemoveAll(dir)
+		// The payload reached the trash; only the original could not be removed.
+		// Deleting the entry here would throw away the surviving copy.
+		if !errors.Is(err, ErrSourceRetained) {
+			_ = os.RemoveAll(dir)
+		}
 		return TrashItem{}, err
 	}
 	return item, nil
@@ -133,15 +184,23 @@ func (v *Vault) TrashFolder(rel string) (TrashItem, error) {
 	defer v.mu.Unlock()
 
 	src := filepath.Join(v.root, filepath.FromSlash(rel))
-	if !v.contains(src) || filepath.Clean(src) == filepath.Clean(v.root) {
+	resolved, safe := resolveUserPath(v.root, src, false)
+	// isInternal matters as much as contains here: `.qiaoji` holds the trash
+	// itself, so moving it would ask moveTree to copy a directory into its own
+	// subtree.
+	if !safe || filepath.Clean(src) == filepath.Clean(v.root) {
 		return TrashItem{}, errors.New("folder outside vault")
 	}
+	src = resolved
 	info, err := os.Stat(src)
 	if err != nil {
 		return TrashItem{}, ErrNotFound
 	}
 	if !info.IsDir() {
 		return TrashItem{}, errors.New("不是文件夹")
+	}
+	if err := ensureNoSymlinks(src); err != nil {
+		return TrashItem{}, err
 	}
 
 	notes, files, size := measureTree(src)
@@ -230,8 +289,11 @@ func (v *Vault) CountTrash() int {
 func (v *Vault) Restore(entryID string) (Restored, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if !safeEntryID(entryID) {
+		return Restored{}, errors.New("invalid trash entry")
+	}
 
-	dir := filepath.Join(v.trashRoot(), filepath.Base(entryID))
+	dir := filepath.Join(v.trashRoot(), entryID)
 	data, err := os.ReadFile(filepath.Join(dir, "meta.json"))
 	if err != nil {
 		return Restored{}, ErrNotFound
@@ -260,8 +322,11 @@ func (v *Vault) restoreNote(dir string, item TrashItem) (Restored, error) {
 	}
 
 	target := filepath.Join(v.root, filepath.FromSlash(item.OriginalRel))
-	if !v.contains(target) {
+	resolvedTarget, safe := resolveUserPath(v.root, target, true)
+	if !safe {
 		target = filepath.Join(v.root, filepath.Base(src))
+	} else {
+		target = resolvedTarget
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return Restored{}, err
@@ -296,8 +361,11 @@ func (v *Vault) restoreFolder(dir string, item TrashItem) (Restored, error) {
 	}
 
 	target := filepath.Join(v.root, filepath.FromSlash(item.OriginalRel))
-	if !v.contains(target) || filepath.Clean(target) == filepath.Clean(v.root) {
+	resolvedTarget, safe := resolveUserPath(v.root, target, true)
+	if !safe || filepath.Clean(target) == filepath.Clean(v.root) {
 		target = filepath.Join(v.root, filepath.Base(src))
+	} else {
+		target = resolvedTarget
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return Restored{}, err
@@ -319,8 +387,7 @@ func (v *Vault) restoreFolder(dir string, item TrashItem) (Restored, error) {
 func (v *Vault) PurgeTrash(entryID string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if entryID == "" || entryID == "." || entryID == ".." ||
-		entryID != filepath.Base(entryID) || strings.ContainsAny(entryID, `/\`) {
+	if !safeEntryID(entryID) {
 		return errors.New("invalid trash entry")
 	}
 	root := filepath.Clean(v.trashRoot())
@@ -342,28 +409,77 @@ func (v *Vault) EmptyTrash() error {
 
 // ---------------------------------------------------------------- moving
 
+// ErrSourceRetained reports that a move copied the payload successfully but
+// could not delete the original. The copy is intact, so callers must keep it
+// rather than clean up after the error.
+var ErrSourceRetained = errors.New("原文件未能删除")
+
 // moveTree relocates a file or directory, falling back to copy-then-delete
 // when the source and destination sit on different volumes.
 func moveTree(src, dst string) error {
+	if err := ensureNoSymlinks(src); err != nil {
+		return err
+	}
+	if err := ensureDestinationPath(dst); err != nil {
+		return err
+	}
 	if err := os.Rename(src, dst); err == nil {
 		return nil
+	}
+	// A destination inside the source is not a cross-volume move; copying would
+	// walk into the copy it is making and recurse until the path length stops
+	// it. Callers are expected to rule this out, so it is an error, not a
+	// fallback.
+	if isWithinDir(src, dst) {
+		return errors.New("目标位置在源目录内")
 	}
 	if err := copyTree(src, dst); err != nil {
 		_ = os.RemoveAll(dst)
 		return err
 	}
-	return os.RemoveAll(src)
+	if err := os.RemoveAll(src); err != nil {
+		// The copy is now the only complete copy. Reporting a plain error would
+		// have the caller delete it while the original is already partially
+		// gone, which loses the note outright.
+		return fmt.Errorf("%w: %v", ErrSourceRetained, err)
+	}
+	return nil
+}
+
+func ensureNoSymlinks(src string) error {
+	return filepath.WalkDir(src, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return errors.New("不支持移动含符号链接的目录")
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("不支持移动含符号链接的目录")
+		}
+		return nil
+	})
 }
 
 func copyTree(src, dst string) error {
+	if err := ensureDestinationPath(dst); err != nil {
+		return err
+	}
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("不支持移动符号链接")
+	}
 	if !info.IsDir() {
 		return copyFile(src, dst, info.Mode().Perm())
 	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
+	if err := os.Mkdir(dst, 0o755); err != nil {
 		return err
 	}
 	entries, err := os.ReadDir(src)
@@ -379,6 +495,9 @@ func copyTree(src, dst string) error {
 }
 
 func copyFile(src, dst string, mode fs.FileMode) error {
+	if err := ensureDestinationPath(dst); err != nil {
+		return err
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -388,7 +507,7 @@ func copyFile(src, dst string, mode fs.FileMode) error {
 	if mode == 0 {
 		mode = 0o644
 	}
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return err
 	}
@@ -397,6 +516,32 @@ func copyFile(src, dst string, mode fs.FileMode) error {
 		return err
 	}
 	return out.Close()
+}
+
+// ensureDestinationPath rejects existing symlinks in the destination chain.
+// The cross-volume fallback cannot rely on Rename's atomic replacement
+// semantics, so it must never let MkdirAll or OpenFile follow an attacker-made
+// link into another directory.
+func ensureDestinationPath(target string) error {
+	probe := filepath.Clean(target)
+	for {
+		info, err := os.Lstat(probe)
+		switch {
+		case err == nil:
+			if info.Mode()&os.ModeSymlink != 0 {
+				return errors.New("目标路径包含符号链接")
+			}
+		case errors.Is(err, os.ErrNotExist):
+			// The final component may not exist yet; continue checking parents.
+		default:
+			return err
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return nil
+		}
+		probe = parent
+	}
 }
 
 // measureTree counts the notes, the other files kept beside them, and the

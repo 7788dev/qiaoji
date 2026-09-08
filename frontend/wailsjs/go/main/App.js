@@ -10,6 +10,10 @@ export function ApplyUpdate() {
   return window['go']['main']['App']['ApplyUpdate']();
 }
 
+export function AuthorizeDocumentImages(arg1, arg2) {
+  return window['go']['main']['App']['AuthorizeDocumentImages'](arg1, arg2);
+}
+
 export function Bootstrap() {
   return window['go']['main']['App']['Bootstrap']();
 }
@@ -18,8 +22,16 @@ export function CancelClose() {
   return window['go']['main']['App']['CancelClose']();
 }
 
+export function CheckDocuments() {
+  return window['go']['main']['App']['CheckDocuments']();
+}
+
 export function CheckForUpdates() {
   return window['go']['main']['App']['CheckForUpdates']();
+}
+
+export function CloseDocument(arg1) {
+  return window['go']['main']['App']['CloseDocument'](arg1);
 }
 
 export function ConfirmClose() {
@@ -74,6 +86,14 @@ export function IndexState() {
   return window['go']['main']['App']['IndexState']();
 }
 
+export function ListDirectory(arg1, arg2) {
+  return window['go']['main']['App']['ListDirectory'](arg1, arg2);
+}
+
+export function ListDocumentTrash(arg1) {
+  return window['go']['main']['App']['ListDocumentTrash'](arg1);
+}
+
 export function ListFolders() {
   return window['go']['main']['App']['ListFolders']();
 }
@@ -98,8 +118,20 @@ export function MoveNote(arg1, arg2) {
   return window['go']['main']['App']['MoveNote'](arg1, arg2);
 }
 
+export function NewDocument() {
+  return window['go']['main']['App']['NewDocument']();
+}
+
+export function OpenDocument(arg1) {
+  return window['go']['main']['App']['OpenDocument'](arg1);
+}
+
 export function OpenExternal(arg1) {
   return window['go']['main']['App']['OpenExternal'](arg1);
+}
+
+export function OpenFolder(arg1) {
+  return window['go']['main']['App']['OpenFolder'](arg1);
 }
 
 export function OpenPath(arg1) {
@@ -114,8 +146,24 @@ export function PurgeTrashItem(arg1) {
   return window['go']['main']['App']['PurgeTrashItem'](arg1);
 }
 
+export function ReadDocumentDisk(arg1) {
+  return window['go']['main']['App']['ReadDocumentDisk'](arg1);
+}
+
 export function RebuildIndex() {
   return window['go']['main']['App']['RebuildIndex']();
+}
+
+export function ReloadDocument(arg1, arg2) {
+  return window['go']['main']['App']['ReloadDocument'](arg1, arg2);
+}
+
+export function RememberDocuments(arg1, arg2) {
+  return window['go']['main']['App']['RememberDocuments'](arg1, arg2);
+}
+
+export function RenameDocument(arg1, arg2) {
+  return window['go']['main']['App']['RenameDocument'](arg1, arg2);
 }
 
 export function RenameFolder(arg1, arg2) {
@@ -134,6 +182,10 @@ export function RequestQuit() {
   return window['go']['main']['App']['RequestQuit']();
 }
 
+export function RestoreDocumentTrash(arg1, arg2) {
+  return window['go']['main']['App']['RestoreDocumentTrash'](arg1, arg2);
+}
+
 export function RestoreNote(arg1) {
   return window['go']['main']['App']['RestoreNote'](arg1);
 }
@@ -144,6 +196,14 @@ export function RevealInExplorer(arg1) {
 
 export function SaveAsset(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveAsset'](arg1, arg2, arg3);
+}
+
+export function SaveDocument(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SaveDocument'](arg1, arg2, arg3, arg4);
+}
+
+export function SaveDocumentAs(arg1, arg2) {
+  return window['go']['main']['App']['SaveDocumentAs'](arg1, arg2);
 }
 
 export function SaveNote(arg1, arg2, arg3, arg4) {
@@ -196,6 +256,10 @@ export function Stats() {
 
 export function Suggest(arg1, arg2) {
   return window['go']['main']['App']['Suggest'](arg1, arg2);
+}
+
+export function TrashDocument(arg1) {
+  return window['go']['main']['App']['TrashDocument'](arg1);
 }
 
 export function WindowClose() {

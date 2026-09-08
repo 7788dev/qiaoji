@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	gort "runtime"
@@ -17,6 +18,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"qiaoji/internal/config"
+	"qiaoji/internal/document"
 	"qiaoji/internal/exporter"
 	"qiaoji/internal/index"
 	"qiaoji/internal/store"
@@ -29,6 +31,7 @@ type App struct {
 	ctx         context.Context
 	settings    *config.Store
 	settingsErr error
+	documents   *document.Manager
 
 	// tray is set before Run so window commands can ask whether hiding to the
 	// notification area is actually safe.
@@ -131,6 +134,7 @@ func NewApp() *App {
 	app := &App{
 		settings: settings, settingsErr: err, started: make(chan struct{}),
 		selfWrites: make(map[string]selfWriteMark),
+		documents:  document.NewManager(),
 	}
 	return app
 }
@@ -147,9 +151,13 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 
-	// There is no welcome screen: the app always opens a library on launch and
-	// writes the starter notes the first time that folder is used.
-	if err := a.openVault(a.settings.Get().VaultPath); err != nil {
+	// A folder is optional. A fresh installation starts with a blank draft and
+	// does not create a vault, marker or sample documents.
+	path := a.settings.Get().WorkspacePath
+	if path == "" {
+		return
+	}
+	if err := a.openVault(path); err != nil {
 		a.mu.Lock()
 		a.vaultErr = err.Error()
 		a.mu.Unlock()
@@ -225,7 +233,7 @@ func (a *App) Bootstrap() Bootstrap {
 	s := a.settings.Get()
 	out := Bootstrap{
 		Settings:  s,
-		VaultPath: s.VaultPath,
+		VaultPath: s.WorkspacePath,
 		Version:   config.AppVersion,
 	}
 	a.mu.RLock()
@@ -254,11 +262,18 @@ func (a *App) OpenVault(path string) (Bootstrap, error) {
 	if strings.TrimSpace(path) == "" {
 		return a.Bootstrap(), errors.New("请选择一个笔记库文件夹")
 	}
+	previousPath := a.settings.Get().VaultPath
 	if err := a.openVault(path); err != nil {
 		return a.Bootstrap(), err
 	}
 	if err := a.settings.SetVault(path); err != nil {
-		return a.Bootstrap(), err
+		// Do not leave a live session pointing at a location that will be lost on
+		// restart. The settings store restores its previous value on a failed
+		// write, then we reopen that previous session here.
+		if strings.TrimSpace(previousPath) != "" {
+			_ = a.openVault(previousPath)
+		}
+		return a.Bootstrap(), fmt.Errorf("无法保存笔记库位置: %w", err)
 	}
 	return a.Bootstrap(), nil
 }
@@ -267,34 +282,13 @@ func (a *App) openVault(path string) error {
 	if strings.TrimSpace(path) == "" {
 		path = config.Defaults().VaultPath
 	}
-	v, err := store.Open(path)
+	v, err := store.OpenFolder(path)
 	if err != nil {
 		return fmt.Errorf("无法打开笔记库: %w", err)
 	}
 
-	// Starter notes are written exactly once per folder. Emptying the library
-	// afterwards leaves it empty, which is what someone who deleted every note
-	// is asking for.
-	if !v.IsInitialised() {
-		if v.IsEmpty() {
-			if err := v.Seed(); err != nil {
-				return fmt.Errorf("初始化示例笔记失败: %w", err)
-			}
-		}
-		if err := v.MarkInitialised(); err != nil {
-			return fmt.Errorf("初始化笔记库失败: %w", err)
-		}
-	}
-
-	vaultID, err := v.VaultID()
-	if err != nil {
-		return fmt.Errorf("无法建立笔记库标识: %w", err)
-	}
+	vaultID := "folder-" + document.Revision([]byte(document.PathKey(v.Root())))
 	indexPath := filepath.Join(config.IndexDir(vaultID), "index.db")
-	legacyPath := v.InternalPath("index.db")
-	if _, migrateErr := index.PrepareExternal(legacyPath, indexPath); migrateErr != nil && a.ctx != nil {
-		runtime.LogWarningf(a.ctx, "migrate index: %v", migrateErr)
-	}
 	ix, err := index.Open(indexPath)
 	if err != nil {
 		// A corrupt index must never block startup; the vault is the truth.
@@ -613,7 +607,6 @@ func (a *App) SaveNote(path, content, expectedRevision string, force bool) (stor
 		return store.Meta{}, err
 	}
 	defer done()
-	a.markSelfPath(path, false)
 	n, err := v.SaveIfRevision(path, content, expectedRevision, force)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -624,6 +617,7 @@ func (a *App) SaveNote(path, content, expectedRevision string, force bool) (stor
 	if err := updateIndexedNote(ix, n, path); err != nil {
 		return n.Meta, err
 	}
+	a.markSelfPath(path, false)
 	a.markSelfPath(n.Path, false)
 	return n.Meta, nil
 }
@@ -634,8 +628,11 @@ func (a *App) SaveAsset(notePath, filename string, data []byte) (string, error) 
 		return "", err
 	}
 	defer done()
-	a.markSelfPath(filepath.Dir(notePath), true)
-	return v.SaveAsset(notePath, filename, data)
+	relative, err := v.SaveAsset(notePath, filename, data)
+	if err == nil {
+		a.markSelfPath(filepath.Dir(notePath), true)
+	}
+	return relative, err
 }
 
 func (a *App) RenameNote(path, title string) (store.Meta, error) {
@@ -644,7 +641,6 @@ func (a *App) RenameNote(path, title string) (store.Meta, error) {
 		return store.Meta{}, err
 	}
 	defer done()
-	a.markSelfPath(path, false)
 	n, err := v.Rename(path, title)
 	if err != nil {
 		return store.Meta{}, err
@@ -652,6 +648,7 @@ func (a *App) RenameNote(path, title string) (store.Meta, error) {
 	if err := updateIndexedNote(ix, n, path); err != nil {
 		return n.Meta, err
 	}
+	a.markSelfPath(path, false)
 	a.markSelfPath(n.Path, false)
 	return n.Meta, nil
 }
@@ -662,7 +659,6 @@ func (a *App) MoveNote(path, folder string) (store.Meta, error) {
 		return store.Meta{}, err
 	}
 	defer done()
-	a.markSelfPath(path, false)
 	n, err := v.Move(path, folder)
 	if err != nil {
 		return store.Meta{}, err
@@ -670,6 +666,7 @@ func (a *App) MoveNote(path, folder string) (store.Meta, error) {
 	if err := updateIndexedNote(ix, n, path); err != nil {
 		return n.Meta, err
 	}
+	a.markSelfPath(path, false)
 	a.markSelfPath(n.Path, false)
 	return n.Meta, nil
 }
@@ -697,7 +694,6 @@ func (a *App) SetFavorite(path string, favorite bool) (store.Meta, error) {
 		return store.Meta{}, err
 	}
 	defer done()
-	a.markSelfPath(path, false)
 	n, err := v.SetFavorite(path, favorite)
 	if err != nil {
 		return store.Meta{}, err
@@ -705,6 +701,7 @@ func (a *App) SetFavorite(path string, favorite bool) (store.Meta, error) {
 	if err := updateIndexedNote(ix, n, ""); err != nil {
 		return n.Meta, err
 	}
+	a.markSelfPath(path, false)
 	return n.Meta, nil
 }
 
@@ -714,7 +711,6 @@ func (a *App) SetNoteTags(path string, tags []string) (store.Meta, error) {
 		return store.Meta{}, err
 	}
 	defer done()
-	a.markSelfPath(path, false)
 	n, err := v.SetTags(path, tags)
 	if err != nil {
 		return store.Meta{}, err
@@ -722,6 +718,7 @@ func (a *App) SetNoteTags(path string, tags []string) (store.Meta, error) {
 	if err := updateIndexedNote(ix, n, ""); err != nil {
 		return n.Meta, err
 	}
+	a.markSelfPath(path, false)
 	return n.Meta, nil
 }
 
@@ -733,11 +730,11 @@ func (a *App) DeleteNote(path string) (store.TrashItem, error) {
 		return store.TrashItem{}, err
 	}
 	defer done()
-	a.markSelfPath(path, false)
 	item, err := v.Trash(path)
 	if err != nil {
 		return store.TrashItem{}, err
 	}
+	a.markSelfPath(path, false)
 	return item, ix.Remove(path)
 }
 
@@ -827,7 +824,6 @@ func (a *App) RenameFolder(rel, name string) (string, error) {
 	}
 	defer done()
 	oldDir := filepath.Join(v.Root(), filepath.FromSlash(rel))
-	a.markSelfPath(oldDir, true)
 	newRel, err := v.RenameFolderTo(rel, name)
 	if err != nil {
 		if errors.Is(err, store.ErrExists) {
@@ -836,6 +832,7 @@ func (a *App) RenameFolder(rel, name string) (string, error) {
 		return "", err
 	}
 	newDir := filepath.Join(v.Root(), filepath.FromSlash(newRel))
+	a.markSelfPath(oldDir, true)
 	a.markSelfPath(newDir, true)
 	// Only the moved subtree is dropped; the following stat walk re-reads
 	// those notes and nothing else. Rebuilding the whole index here cost the
@@ -856,7 +853,6 @@ func (a *App) DeleteFolder(rel string) (store.TrashItem, error) {
 		return store.TrashItem{}, err
 	}
 	defer done()
-	a.markSelfPath(filepath.Join(v.Root(), filepath.FromSlash(rel)), true)
 	item, err := v.DeleteFolder(rel)
 	if err != nil {
 		return store.TrashItem{}, err
@@ -865,16 +861,26 @@ func (a *App) DeleteFolder(rel string) (store.TrashItem, error) {
 		return item, err
 	}
 	_ = ix.RemoveFolder(rel)
+	a.markSelfPath(filepath.Join(v.Root(), filepath.FromSlash(rel)), true)
 	return item, nil
 }
 
 // ---------------------------------------------------------------- tags
 
+const tagMutationBatchSize = 256
+
 // RenameTag rewrites the tag across every note that carries it.
 func (a *App) RenameTag(oldName, newName string) (int, error) {
 	newName = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(newName), "#"))
-	if newName == "" {
-		return 0, errors.New("标签名不能为空")
+	if err := store.ValidateTagName(newName); err != nil {
+		return 0, err
+	}
+	oldName = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(oldName), "#"))
+	if err := store.ValidateTagName(oldName); err != nil {
+		return 0, err
+	}
+	if oldName == newName {
+		return 0, nil
 	}
 	return a.mutateTag(oldName, func(tags []string) []string {
 		out := make([]string, 0, len(tags))
@@ -889,6 +895,10 @@ func (a *App) RenameTag(oldName, newName string) (int, error) {
 }
 
 func (a *App) DeleteTag(name string) (int, error) {
+	name = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(name), "#"))
+	if err := store.ValidateTagName(name); err != nil {
+		return 0, err
+	}
 	return a.mutateTag(name, func(tags []string) []string {
 		out := make([]string, 0, len(tags))
 		for _, t := range tags {
@@ -906,23 +916,31 @@ func (a *App) mutateTag(name string, fn func([]string) []string) (int, error) {
 		return 0, err
 	}
 	defer done()
-	metas, err := ix.List(index.Query{Scope: "tag", Value: name, Limit: 100000})
-	if err != nil {
-		return 0, err
-	}
 	n := 0
-	for _, m := range metas {
-		a.markSelfPath(m.Path, false)
-		note, err := v.SetTags(m.Path, fn(m.Tags))
+	for {
+		// List is intentionally bounded for Wails responses. Re-querying the
+		// first bounded batch is safe because every supported mutation removes
+		// the old tag from the matching set.
+		metas, err := ix.List(index.Query{Scope: "tag", Value: name, Limit: tagMutationBatchSize})
 		if err != nil {
 			return n, err
 		}
-		if err := updateIndexedNote(ix, note, ""); err != nil {
-			return n, err
+		if len(metas) == 0 {
+			return n, nil
 		}
-		n++
+		for _, m := range metas {
+			note, err := v.SetTags(m.Path, fn(m.Tags))
+			if err != nil {
+				return n, err
+			}
+			if err := updateIndexedNote(ix, note, ""); err != nil {
+				return n, err
+			}
+			a.markSelfPath(m.Path, false)
+			a.markSelfPath(note.Path, false)
+			n++
+		}
 	}
-	return n, nil
 }
 
 // ---------------------------------------------------------------- search
@@ -1018,10 +1036,19 @@ func (a *App) OpenPath(path string) error {
 }
 
 func (a *App) OpenExternal(url string) error {
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+	raw := strings.TrimSpace(url)
+	if strings.IndexFunc(raw, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return errors.New("链接包含非法控制字符")
+	}
+	u, err := neturl.Parse(raw)
+	if err != nil || u == nil || !u.IsAbs() || u.Host == "" || u.Hostname() == "" || u.User != nil || u.Opaque != "" {
+		return errors.New("仅支持打开有效的绝对 http/https 链接")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
 		return errors.New("仅支持打开 http/https 链接")
 	}
-	runtime.BrowserOpenURL(a.ctx, url)
+	runtime.BrowserOpenURL(a.ctx, raw)
 	return nil
 }
 

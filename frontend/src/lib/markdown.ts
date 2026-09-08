@@ -414,7 +414,9 @@ md.renderer.rules.html_inline = (tokens, idx) => {
   const raw = tokens[idx].content;
   if (/^<br\s*\/?>$/i.test(raw.trim())) return "<br>";
   // Our own task-list plugin injects trusted markup through this same rule.
-  if (raw.startsWith('<input class="md-task"')) return raw;
+  if (/^<input class="md-task" type="checkbox" disabled(?: checked)?>$/.test(raw)) {
+    return raw;
+  }
   return escapeHtml(raw);
 };
 md.renderer.rules.html_block = (tokens, idx) =>
@@ -474,25 +476,15 @@ export interface OutlineEntry {
 export function outlineOf(source: string): OutlineEntry[] {
   const out: OutlineEntry[] = [];
   const slugFor = createSlugger();
-  let inFence = false;
-
-  source.split("\n").forEach((line, index) => {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
-      inFence = !inFence;
-      return;
-    }
-    if (inFence) return;
-    const match = /^(#{1,6})\s+(.*)$/.exec(trimmed);
-    if (!match) return;
-
-    // Slugged from the raw heading, exactly as the renderer sees it, and only
-    // then stripped for display. Slugging the stripped text made the outline
-    // disagree with the anchor for anything containing an underscore.
-    const raw = match[2].trim();
+  // The block parser understands setext headings and matching fence lengths.
+  // parse() builds tokens only; no HTML, highlighting or math is rendered.
+  const tokens = md.parse(source, {});
+  for (let index = 0; index < tokens.length; index++) {
+    const heading = tokens[index];
+    if (heading.type !== "heading_open") continue;
+    const raw = tokens[index + 1]?.content ?? "";
     const text = raw.replace(/[*_`~]/g, "").trim();
-    if (!text) return;
-    out.push({ level: match[1].length, text, slug: slugFor(raw), line: index });
-  });
+    out.push({ level: Number(heading.tag.slice(1)), text: text || "空标题", slug: slugFor(raw), line: heading.map?.[0] ?? 0 });
+  }
   return out;
 }

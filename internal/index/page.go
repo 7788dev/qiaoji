@@ -36,6 +36,7 @@ type pageCursor struct {
 }
 
 const defaultPageSize = 200
+const maxCursorBytes = 4096
 
 func encodeCursor(c pageCursor) string {
 	b, _ := json.Marshal(c)
@@ -45,6 +46,9 @@ func encodeCursor(c pageCursor) string {
 func decodeCursor(raw string) (pageCursor, error) {
 	if strings.TrimSpace(raw) == "" {
 		return pageCursor{}, nil
+	}
+	if len(raw) > maxCursorBytes {
+		return pageCursor{}, errors.New("invalid note page cursor")
 	}
 	b, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
@@ -150,6 +154,7 @@ func pageOrder(sortBy string) string {
 // filter construction in one place prevents scope behavior drifting between
 // APIs.
 func listWhere(scope, value string) ([]string, []any) {
+	value = firstRunes(strings.TrimSpace(value), 512)
 	where := []string{"1=1"}
 	args := []any{}
 	switch scope {

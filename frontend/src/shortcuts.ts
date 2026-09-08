@@ -18,6 +18,8 @@ export interface ShortcutSpec {
   alt?: boolean;
   /** Runs even when a dialog is open. */
   global?: boolean;
+  /** Limits document formatting shortcuts to the editor that owns the event. */
+  when?: (event: KeyboardEvent) => boolean;
   run: () => void;
 }
 
@@ -65,6 +67,7 @@ export function installShortcuts(specs: ShortcutSpec[], onEscape: () => boolean)
     for (const spec of specs) {
       if (!matches(spec, ev)) continue;
       if (dialogOpen && !spec.global) continue;
+      if (spec.when && !spec.when(ev)) continue;
       // Unmodified keys must never steal input from a text field.
       if (!spec.ctrl && !spec.alt && isTypingTarget(ev.target)) continue;
 

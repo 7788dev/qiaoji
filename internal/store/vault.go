@@ -25,9 +25,16 @@ var (
 	ErrConflict = errors.New("note changed on disk")
 )
 
+const (
+	maxNoteBytes  = 8 << 20
+	maxTitleRunes = 240
+	maxTagRunes   = 120
+)
+
 type Vault struct {
-	mu   sync.RWMutex
-	root string
+	mu             sync.RWMutex
+	root           string
+	plainDocuments bool
 }
 
 func Open(root string) (*Vault, error) {
@@ -40,6 +47,9 @@ func Open(root string) (*Vault, error) {
 	}
 	if err := os.MkdirAll(abs, 0o755); err != nil {
 		return nil, err
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(abs); resolveErr == nil {
+		abs = filepath.Clean(resolved)
 	}
 	if err := os.MkdirAll(filepath.Join(abs, InternalDir, "trash"), 0o755); err != nil {
 		return nil, err
@@ -158,6 +168,21 @@ func skipDir(name string) bool {
 	return strings.HasPrefix(name, ".") || name == "node_modules" || name == "$RECYCLE.BIN"
 }
 
+func validateTitle(title string) error {
+	if strings.TrimSpace(title) == "" {
+		return errors.New("标题不能为空")
+	}
+	if len([]rune(title)) > maxTitleRunes {
+		return errors.New("标题过长")
+	}
+	for _, r := range title {
+		if r == '\r' || r == '\n' || r < 0x20 || r == 0x7f {
+			return errors.New("标题包含非法控制字符")
+		}
+	}
+	return nil
+}
+
 func isMarkdown(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	return ext == ".md" || ext == ".markdown" || ext == ".mdown"
@@ -197,13 +222,16 @@ func (v *Vault) Scan() ([]Note, error) {
 }
 
 func (v *Vault) readNote(abs string) (Note, error) {
+	abs, info, err := v.notePath(abs)
+	if err != nil {
+		return Note{}, err
+	}
 	raw, err := os.ReadFile(abs)
 	if err != nil {
 		return Note{}, err
 	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return Note{}, err
+	if int64(len(raw)) > maxNoteBytes {
+		return Note{}, fmt.Errorf("笔记超过 %d MB 限制", maxNoteBytes>>20)
 	}
 	// A header we cannot decode still lists correctly; only writes have to
 	// refuse, and they re-parse before touching the file.
@@ -234,7 +262,9 @@ func (v *Vault) readNote(abs string) (Note, error) {
 	}
 
 	id := fm.ID
-	if id == "" {
+	if v.plainDocuments {
+		id = plainDocumentID(abs)
+	} else if id == "" {
 		id = newID()
 	}
 
@@ -258,32 +288,44 @@ func (v *Vault) readNote(abs string) (Note, error) {
 	}, nil
 }
 
+// notePath validates and canonicalises a note path before any operation reads
+// it. Stat happens before ReadFile so a corrupted multi-gigabyte Markdown file
+// cannot turn a routine list/save request into an avoidable memory spike.
+func (v *Vault) notePath(abs string) (string, os.FileInfo, error) {
+	canonical, ok := resolveUserPath(v.root, abs, false)
+	if !ok || !isMarkdown(filepath.Base(canonical)) {
+		return "", nil, ErrNotFound
+	}
+	info, err := os.Stat(canonical)
+	if err != nil {
+		return "", nil, err
+	}
+	if info.IsDir() {
+		return "", nil, ErrNotFound
+	}
+	if info.Size() > maxNoteBytes {
+		return "", nil, fmt.Errorf("笔记超过 %d MB 限制", maxNoteBytes>>20)
+	}
+	return canonical, info, nil
+}
+
 // Read loads one note by absolute path.
 func (v *Vault) Read(abs string) (Note, error) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	if !v.contains(abs) {
+	if _, ok := resolveUserPath(v.root, abs, false); !ok {
 		return Note{}, ErrNotFound
 	}
 	return v.readNote(abs)
 }
 
 func (v *Vault) contains(abs string) bool {
-	rel, err := filepath.Rel(v.root, abs)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	_, ok := resolveUserPath(v.root, abs, true)
+	return ok
 }
 
 func (v *Vault) isInternal(abs string) bool {
-	rel, err := filepath.Rel(v.root, abs)
-	if err != nil {
-		return true
-	}
-	rel = filepath.Clean(rel)
-	return strings.EqualFold(rel, InternalDir) ||
-		strings.HasPrefix(strings.ToLower(rel), strings.ToLower(InternalDir+string(filepath.Separator)))
+	return isInternalPath(v.root, abs)
 }
 
 // ---------------------------------------------------------------- writing
@@ -295,14 +337,23 @@ func (v *Vault) Create(folder, title, body string) (Note, error) {
 	defer v.mu.Unlock()
 
 	dir := filepath.Join(v.root, filepath.FromSlash(folder))
-	if !v.contains(dir) {
+	resolvedDir, safe := resolveUserPath(v.root, dir, true)
+	if !safe {
 		return Note{}, errors.New("folder outside vault")
+	}
+	dir = resolvedDir
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "未命名笔记"
+	}
+	if err := validateTitle(title); err != nil {
+		return Note{}, err
+	}
+	if len([]byte(body)) > maxNoteBytes {
+		return Note{}, fmt.Errorf("笔记超过 %d MB 限制", maxNoteBytes>>20)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Note{}, err
-	}
-	if title == "" {
-		title = "未命名笔记"
 	}
 	if body == "" {
 		body = "# " + title + "\n\n"
@@ -311,7 +362,11 @@ func (v *Vault) Create(folder, title, body string) (Note, error) {
 	now := time.Now()
 	fm := frontMatter{ID: newID(), Title: title, Created: now, Updated: now}
 	abs := uniquePath(dir, slugify(title))
-	if err := os.WriteFile(abs, renderFile(fm, body), 0o644); err != nil {
+	data, err := renderNoteFile(fm, body)
+	if err != nil {
+		return Note{}, err
+	}
+	if err := os.WriteFile(abs, data, 0o644); err != nil {
 		return Note{}, err
 	}
 	return v.readNote(abs)
@@ -328,13 +383,21 @@ func (v *Vault) Save(abs, body string) (Note, error) {
 func (v *Vault) SaveIfRevision(abs, body, expectedRevision string, force bool) (Note, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if !v.contains(abs) {
-		return Note{}, ErrNotFound
+	canonical, _, err := v.notePath(abs)
+	if err != nil {
+		return Note{}, err
+	}
+	abs = canonical
+	if len([]byte(body)) > maxNoteBytes {
+		return Note{}, fmt.Errorf("笔记超过 %d MB 限制", maxNoteBytes>>20)
 	}
 
 	raw, err := os.ReadFile(abs)
 	if err != nil {
 		return Note{}, err
+	}
+	if int64(len(raw)) > maxNoteBytes {
+		return Note{}, fmt.Errorf("笔记超过 %d MB 限制", maxNoteBytes>>20)
 	}
 	if !force && expectedRevision != "" && revisionOf(raw) != expectedRevision {
 		return Note{}, ErrConflict
@@ -357,11 +420,18 @@ func (v *Vault) SaveIfRevision(abs, body, expectedRevision string, force bool) (
 	if title == "" {
 		title = strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs))
 	}
+	if err := validateTitle(title); err != nil {
+		return Note{}, err
+	}
 	renamed := !strings.EqualFold(fm.Title, title)
 	fm.Title = title
 	fm.Updated = time.Now()
 
-	if err := writeAtomic(abs, renderFile(fm, body)); err != nil {
+	data, err := renderNoteFile(fm, body)
+	if err != nil {
+		return Note{}, err
+	}
+	if err := writeAtomic(abs, data); err != nil {
 		return Note{}, err
 	}
 
@@ -382,12 +452,17 @@ func (v *Vault) SaveIfRevision(abs, body, expectedRevision string, force bool) (
 func (v *Vault) UpdateMeta(abs string, fn func(*frontMatter)) (Note, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if !v.contains(abs) {
-		return Note{}, ErrNotFound
+	canonical, _, err := v.notePath(abs)
+	if err != nil {
+		return Note{}, err
 	}
+	abs = canonical
 	raw, err := os.ReadFile(abs)
 	if err != nil {
 		return Note{}, err
+	}
+	if int64(len(raw)) > maxNoteBytes {
+		return Note{}, fmt.Errorf("笔记超过 %d MB 限制", maxNoteBytes>>20)
 	}
 	fm, body, err := parseFrontMatter(raw)
 	if err != nil {
@@ -398,7 +473,11 @@ func (v *Vault) UpdateMeta(abs string, fn func(*frontMatter)) (Note, error) {
 	}
 	fn(&fm)
 	fm.Tags = normaliseTags(fm.Tags)
-	if err := writeAtomic(abs, renderFile(fm, body)); err != nil {
+	data, err := renderNoteFile(fm, body)
+	if err != nil {
+		return Note{}, err
+	}
+	if err := writeAtomic(abs, data); err != nil {
 		return Note{}, err
 	}
 	return v.readNote(abs)
@@ -410,12 +489,20 @@ func (v *Vault) UpdateMeta(abs string, fn func(*frontMatter)) (Note, error) {
 func (v *Vault) ReassignID(abs string) (Note, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if !v.contains(abs) {
-		return Note{}, ErrNotFound
+	if v.plainDocuments {
+		return v.readNote(abs)
 	}
+	canonical, _, err := v.notePath(abs)
+	if err != nil {
+		return Note{}, err
+	}
+	abs = canonical
 	raw, err := os.ReadFile(abs)
 	if err != nil {
 		return Note{}, err
+	}
+	if int64(len(raw)) > maxNoteBytes {
+		return Note{}, fmt.Errorf("笔记超过 %d MB 限制", maxNoteBytes>>20)
 	}
 	fm, body, err := parseFrontMatter(raw)
 	if err != nil {
@@ -426,7 +513,11 @@ func (v *Vault) ReassignID(abs string) (Note, error) {
 	if fm.Created.IsZero() {
 		fm.Created = fm.Updated
 	}
-	if err := writeAtomic(abs, renderFile(fm, body)); err != nil {
+	data, err := renderNoteFile(fm, body)
+	if err != nil {
+		return Note{}, err
+	}
+	if err := writeAtomic(abs, data); err != nil {
 		return Note{}, err
 	}
 	return v.readNote(abs)
@@ -437,24 +528,33 @@ func (v *Vault) SetFavorite(abs string, fav bool) (Note, error) {
 }
 
 func (v *Vault) SetTags(abs string, tags []string) (Note, error) {
+	if err := validateTags(tags); err != nil {
+		return Note{}, err
+	}
 	return v.UpdateMeta(abs, func(fm *frontMatter) { fm.Tags = tags })
 }
 
 // Rename changes the title (first heading and front matter) and the filename.
 func (v *Vault) Rename(abs, title string) (Note, error) {
 	title = strings.TrimSpace(title)
-	if title == "" {
-		return Note{}, errors.New("标题不能为空")
+	if err := validateTitle(title); err != nil {
+		return Note{}, err
 	}
 	v.mu.Lock()
-	if !v.contains(abs) {
+	canonical, _, err := v.notePath(abs)
+	if err != nil {
 		v.mu.Unlock()
-		return Note{}, ErrNotFound
+		return Note{}, err
 	}
+	abs = canonical
 	raw, err := os.ReadFile(abs)
 	if err != nil {
 		v.mu.Unlock()
 		return Note{}, err
+	}
+	if int64(len(raw)) > maxNoteBytes {
+		v.mu.Unlock()
+		return Note{}, fmt.Errorf("笔记超过 %d MB 限制", maxNoteBytes>>20)
 	}
 	fm, body, err := parseFrontMatter(raw)
 	if err != nil {
@@ -468,7 +568,12 @@ func (v *Vault) Rename(abs, title string) (Note, error) {
 	fm.Updated = time.Now()
 	body = replaceFirstHeading(body, title)
 
-	if err := writeAtomic(abs, renderFile(fm, body)); err != nil {
+	data, err := renderNoteFile(fm, body)
+	if err != nil {
+		v.mu.Unlock()
+		return Note{}, err
+	}
+	if err := writeAtomic(abs, data); err != nil {
 		v.mu.Unlock()
 		return Note{}, err
 	}
@@ -486,15 +591,19 @@ func (v *Vault) Rename(abs, title string) (Note, error) {
 // Move relocates a note into another folder, keeping its id and body.
 func (v *Vault) Move(abs, folder string) (Note, error) {
 	v.mu.Lock()
-	if !v.contains(abs) {
+	canonical, _, err := v.notePath(abs)
+	if err != nil {
 		v.mu.Unlock()
-		return Note{}, ErrNotFound
+		return Note{}, err
 	}
+	abs = canonical
 	dir := filepath.Join(v.root, filepath.FromSlash(folder))
-	if !v.contains(dir) {
+	resolvedDir, safe := resolveUserPath(v.root, dir, true)
+	if !safe {
 		v.mu.Unlock()
 		return Note{}, errors.New("folder outside vault")
 	}
+	dir = resolvedDir
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		v.mu.Unlock()
 		return Note{}, err
@@ -652,6 +761,9 @@ func (v *Vault) CreateFolder(name string) (Folder, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	dir := filepath.Join(v.root, safe)
+	if v.isInternal(dir) {
+		return Folder{}, errors.New("folder outside vault")
+	}
 	if _, err := os.Stat(dir); err == nil {
 		return Folder{}, ErrExists
 	}
@@ -676,10 +788,14 @@ func (v *Vault) RenameFolderTo(rel, name string) (string, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	src := filepath.Join(v.root, filepath.FromSlash(rel))
+	resolvedSrc, srcSafe := resolveUserPath(v.root, src, false)
 	dst := filepath.Join(filepath.Dir(src), slugify(name))
-	if !v.contains(src) || !v.contains(dst) || v.isInternal(src) || v.isInternal(dst) {
+	resolvedDst, dstSafe := resolveUserPath(v.root, dst, true)
+	if !srcSafe || !dstSafe {
 		return "", errors.New("folder outside vault")
 	}
+	src = resolvedSrc
+	dst = resolvedDst
 	info, err := os.Stat(src)
 	if err != nil {
 		return "", err

@@ -22,17 +22,23 @@ type Hit struct {
 	Favorite  bool      `json:"favorite"`
 }
 
+const (
+	maxSearchRunes  = 256
+	maxSearchLimit  = 100
+	maxSuggestRunes = 256
+)
+
 // Search runs a full-text query.
 //
 // The trigram tokenizer cannot answer queries shorter than three characters,
 // which in Chinese rules out most everyday words ("笔记", "工作"). Those fall
 // back to a LIKE scan, which stays comfortably fast at personal-vault sizes.
 func (ix *Index) Search(query string, limit int) ([]Hit, error) {
-	q := strings.TrimSpace(query)
+	q := strings.TrimSpace(firstRunes(query, maxSearchRunes))
 	if q == "" {
 		return []Hit{}, nil
 	}
-	if limit <= 0 || limit > 200 {
+	if limit <= 0 || limit > maxSearchLimit {
 		limit = 60
 	}
 
@@ -243,8 +249,8 @@ func stripMarkdown(body string) string {
 // Suggest powers the quick-open list in the command palette: title matches
 // only, ranked by how early the query appears.
 func (ix *Index) Suggest(query string, limit int) ([]store.Meta, error) {
-	q := strings.TrimSpace(query)
-	if limit <= 0 {
+	q := strings.TrimSpace(firstRunes(query, maxSuggestRunes))
+	if limit <= 0 || limit > maxSearchLimit {
 		limit = 20
 	}
 	if q == "" {
@@ -268,5 +274,13 @@ func (ix *Index) Suggest(query string, limit int) ([]store.Meta, error) {
 // the same.
 func NormaliseQuery(s string) string {
 	fields := strings.FieldsFunc(s, unicode.IsSpace)
-	return strings.Join(fields, " ")
+	return firstRunes(strings.Join(fields, " "), maxSearchRunes)
+}
+
+func firstRunes(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n])
 }

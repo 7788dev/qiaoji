@@ -5,7 +5,6 @@ import (
 	"embed"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -64,7 +63,10 @@ func main() {
 			DisableFramelessWindowDecorations: false,
 			WebviewUserDataPath:               webviewDataPath(),
 			Theme:                             themeFor(s.Theme),
-			IsZoomControlEnabled:              true,
+			// Settings owns application zoom. Native browser zoom would multiply
+			// it invisibly and can be triggered accidentally with Ctrl+wheel.
+			ZoomFactor:           1,
+			IsZoomControlEnabled: false,
 			// Turning off the GPU removes a whole Chromium process worth about
 			// 80 MB, at the cost of software-rasterised scrolling.
 			WebviewGpuIsDisabled: !s.HardwareAcceleration,
@@ -147,17 +149,12 @@ func (a *App) onSecondInstance(options.SecondInstanceData) {
 	a.emit("window:focus", nil)
 }
 
-// closeFlushTimeout bounds how long the window stays open waiting for the
-// frontend to answer. A wedged WebView must not leave a window that refuses to
-// close; anything short of that is a normal flush and finishes far sooner.
-const closeFlushTimeout = 8 * time.Second
-
 // onBeforeClose runs for every exit path, including runtime.Quit.
 //
 // It is a two-step handshake. The first attempt is vetoed and the frontend is
-// asked to flush; ConfirmClose comes back once every buffer is on disk and
-// releases the veto. Returning false immediately, as this used to, let the
-// process exit while the asynchronous flush was still in flight.
+// asked to resolve unsaved buffers. ConfirmClose releases the veto only after
+// each document has been saved or the user explicitly chose not to save it.
+// There is no timeout: a pending dialog must never cause data loss.
 func (a *App) onBeforeClose(ctx context.Context) bool {
 	a.persistWindow(ctx)
 
@@ -185,26 +182,10 @@ func (a *App) onBeforeClose(ctx context.Context) bool {
 	a.closeMu.Unlock()
 
 	a.emit("app:before-close", map[string]any{"quitting": true})
-	go a.forceCloseAfter(done, closeFlushTimeout)
 	return true
 }
 
-// forceCloseAfter releases the veto if the frontend never answers.
-func (a *App) forceCloseAfter(done <-chan struct{}, d time.Duration) {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-done:
-	case <-timer.C:
-		if a.ctx != nil {
-			wruntime.LogWarning(a.ctx, "close flush timed out; quitting anyway")
-		}
-		a.ConfirmClose()
-	}
-}
-
-// ConfirmClose is the frontend's half of the close handshake: every dirty
-// buffer has been written and the window may go.
+// ConfirmClose completes the handshake after every unsaved buffer is resolved.
 func (a *App) ConfirmClose() {
 	a.closeMu.Lock()
 	if a.closePhase == closeConfirmed {

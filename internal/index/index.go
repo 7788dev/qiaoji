@@ -673,6 +673,9 @@ func (ix *Index) List(q Query) ([]store.Meta, error) {
 	if limit <= 0 {
 		limit = 5000
 	}
+	if limit > 5000 {
+		limit = 5000
+	}
 	if q.Scope == "recent" && (q.Limit <= 0 || q.Limit > 50) {
 		limit = 50
 	}

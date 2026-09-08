@@ -224,6 +224,165 @@ func TestSaveAssetCreatesSafeNoteRelativeImage(t *testing.T) {
 	}
 }
 
+func TestVaultRejectsSymlinkEscape(t *testing.T) {
+	v := newVault(t)
+	outside := t.TempDir()
+	outsideNote := filepath.Join(outside, "outside.md")
+	if err := os.WriteFile(outsideNote, []byte("# outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(v.Root(), "linked")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	if _, err := v.Read(filepath.Join(link, "outside.md")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Read through vault symlink = %v, want ErrNotFound", err)
+	}
+	if _, err := v.Create("linked", "不应写入", "# 不应写入\n"); err == nil {
+		t.Fatal("Create through vault symlink unexpectedly succeeded")
+	}
+}
+
+func TestVaultRejectsInternalPaths(t *testing.T) {
+	v := newVault(t)
+	internal := filepath.Join(v.InternalPath(), "hidden.md")
+	if err := os.WriteFile(internal, []byte("# hidden\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Read(internal); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Read internal path = %v, want ErrNotFound", err)
+	}
+	if _, err := v.TrashFolder(".qiaoji"); err == nil {
+		t.Fatal("TrashFolder(.qiaoji) unexpectedly succeeded")
+	}
+	alias := filepath.Join(v.Root(), "internal-alias")
+	if err := os.Symlink(v.InternalPath(), alias); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	if _, err := v.Read(filepath.Join(alias, "hidden.md")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Read through internal symlink = %v, want ErrNotFound", err)
+	}
+}
+
+func TestVaultEnforcesNoteAndTagBudgets(t *testing.T) {
+	v := newVault(t)
+	if _, err := v.Create("", "过大笔记", strings.Repeat("x", maxNoteBytes+1)); err == nil {
+		t.Fatal("oversized note unexpectedly succeeded")
+	}
+	n, err := v.Create("", "标签限制", "# 标签限制\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tooMany := make([]string, 101)
+	if _, err := v.SetTags(n.Path, tooMany); err == nil {
+		t.Fatal("oversized tag list unexpectedly succeeded")
+	}
+}
+
+func TestRenderedNoteBudgetRejectsBeforeReplacingFile(t *testing.T) {
+	v := newVault(t)
+	// The body itself is within the public limit; front matter pushes the
+	// serialized file over it. The operation must fail before creating or
+	// replacing anything on disk.
+	tooLarge := strings.Repeat("x", maxNoteBytes-1)
+	if _, err := v.Create("", "渲染后超限", tooLarge); err == nil {
+		t.Fatal("Create accepted a serialized note larger than the limit")
+	}
+	if matches, _ := filepath.Glob(filepath.Join(v.Root(), "*.md")); len(matches) != 0 {
+		t.Fatalf("oversized Create left files behind: %v", matches)
+	}
+
+	n, err := v.Create("", "保留原文", "# 保留原文\n\n旧内容。\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(n.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Save(n.Path, tooLarge); err == nil {
+		t.Fatal("Save accepted a serialized note larger than the limit")
+	}
+	after, err := os.ReadFile(n.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("oversized Save replaced the original note")
+	}
+}
+
+func TestCreateEmptyTitleUsesUntitledName(t *testing.T) {
+	v := newVault(t)
+	n, err := v.Create("", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Title != "未命名笔记" {
+		t.Fatalf("title = %q, want 未命名笔记", n.Title)
+	}
+}
+
+func TestVaultRejectsOversizedExistingNoteBeforeRead(t *testing.T) {
+	v := newVault(t)
+	p := filepath.Join(v.Root(), "too-large.md")
+	if err := os.WriteFile(p, []byte("# "+strings.Repeat("x", maxNoteBytes)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Read(p); err == nil {
+		t.Fatal("Read oversized existing note unexpectedly succeeded")
+	}
+}
+
+func TestVaultRejectsControlCharactersInTitle(t *testing.T) {
+	v := newVault(t)
+	for _, title := range []string{"bad\nheading", "bad\rheading", "bad\x00title"} {
+		if _, err := v.Create("", title, "# body\n"); err == nil {
+			t.Errorf("Create title %q unexpectedly succeeded", title)
+		}
+	}
+}
+
+func TestTrashFolderRejectsNestedSymlink(t *testing.T) {
+	v := newVault(t)
+	dir := filepath.Join(v.Root(), "folder")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "note.md"), []byte("# note\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link.txt")); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	if _, err := v.TrashFolder("folder"); err == nil {
+		t.Fatal("TrashFolder with nested symlink unexpectedly succeeded")
+	}
+}
+
+func TestCopyTreeRejectsDestinationSymlink(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(source, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	link := filepath.Join(t.TempDir(), "linked")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	target := filepath.Join(link, "copied.txt")
+	if err := copyTree(source, target); err == nil {
+		t.Fatal("copyTree through a destination symlink unexpectedly succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "copied.txt")); !os.IsNotExist(err) {
+		t.Fatalf("copyTree wrote outside its destination boundary: %v", err)
+	}
+}
+
 func TestExternalFileWithoutFrontMatter(t *testing.T) {
 	v := newVault(t)
 	p := filepath.Join(v.Root(), "外部编辑器.md")

@@ -4,6 +4,7 @@ import {
   disposableElement,
   el,
   icon,
+  setSafeHighlight,
   type DisposableHTMLElement,
 } from "../lib/dom";
 import { fullTime, relativeTime } from "../lib/format";
@@ -314,8 +315,7 @@ export function createNoteList(): DisposableHTMLElement {
   }
 
   function setHighlightedText(node: HTMLElement, html: string | undefined, text: string): void {
-    if (html) node.innerHTML = html;
-    else node.textContent = text;
+    setSafeHighlight(node, html, text);
   }
 
   function updateRowNode(node: HTMLElement, row: Row, index: number): void {

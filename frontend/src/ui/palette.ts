@@ -1,6 +1,6 @@
 import * as actions from "../actions";
 import * as api from "../api";
-import { debounce, el, icon, kbd } from "../lib/dom";
+import { debounce, el, icon, kbd, setSafeHighlight } from "../lib/dom";
 import { relativeTime } from "../lib/format";
 import { activeTab, state, subscribe } from "../store";
 import type { NoteMeta } from "../types";
@@ -524,9 +524,9 @@ export function openSearchPanel(): ModalHandle {
 
     hits.forEach((hit, index) => {
       const title = el("span", { class: "palette__label" });
-      title.innerHTML = hit.titleHtml || hit.title;
+      setSafeHighlight(title, hit.titleHtml, hit.title);
       const snippet = el("div", { class: "note-row__excerpt" });
-      snippet.innerHTML = hit.snippet;
+      setSafeHighlight(snippet, hit.snippet, "");
 
       const node = el(
         "button",

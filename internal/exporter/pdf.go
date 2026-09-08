@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -152,11 +153,8 @@ func fileURL(p string) string {
 	if err != nil {
 		abs = p
 	}
-	u := filepath.ToSlash(abs)
-	if !strings.HasPrefix(u, "/") {
-		u = "/" + u
-	}
-	return "file://" + strings.ReplaceAll(u, " ", "%20")
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	return u.String()
 }
 
 // moveFile falls back to copying when the temp dir is on another volume.
@@ -168,7 +166,7 @@ func moveFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0o644)
+	return writeExportBytes(dst, data)
 }
 
 var (

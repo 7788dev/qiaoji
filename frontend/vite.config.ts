@@ -31,6 +31,10 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return undefined;
+          // Keep the retained rich-editor model separate from app chrome.
+          if (/node_modules\/(?:prosemirror-[^/]+|@milkdown\/prose)\//.test(id)) {
+            return "prosemirror";
+          }
 
           // KaTeX and highlight.js are dynamically imported by the renderer, so
           // a note without maths or code blocks never pays to load them.
@@ -60,5 +64,11 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.ts"],
     restoreMocks: true,
+    // Windows WebView/jsdom startup is sensitive to the default CPU-sized
+    // fork pool, especially when the workspace path contains CJK characters.
+    // Keep the default deterministic; developers can override this on the CLI.
+    pool: "forks",
+    minWorkers: 1,
+    maxWorkers: 1,
   },
 });

@@ -58,6 +58,7 @@ export interface EditorOptions {
 }
 
 export interface EditorSettings {
+  sourceMode?: boolean;
   fontSize: number;
   lineHeight: number;
   tabSize: number;
@@ -71,15 +72,15 @@ const settingsCompartment = new Compartment();
 const readOnlyCompartment = new Compartment();
 const languageCompartment = new Compartment();
 
-function markdownSupport(): Extension[] {
+function markdownSupport(sourceMode = false): Extension[] {
   return [
     markdown({
       base: markdownLanguage,
       codeLanguages,
       addKeymap: false,
     }),
-    syntaxHighlighting(markdownHighlight),
-    mathDecorations,
+    syntaxHighlighting(sourceMode ? sourceHighlight : markdownHighlight),
+    ...(sourceMode ? [] : [mathDecorations]),
   ];
 }
 
@@ -175,6 +176,19 @@ const baseTheme = EditorView.theme({
   },
   ".cm-panel.cm-search label": { color: "var(--fg-secondary)" },
 });
+
+// Follow the application palette without recreating an editor or its history
+// on theme changes. CodeMirror's default palette assumes a light background.
+const sourceHighlight = HighlightStyle.define([
+  { tag: [t.heading, t.strong], color: "var(--fg)", fontWeight: "600" },
+  { tag: t.emphasis, fontStyle: "italic" },
+  { tag: t.strikethrough, textDecoration: "line-through" },
+  { tag: [t.link, t.url], color: "var(--link)" },
+  { tag: [t.keyword, t.atom, t.number, t.typeName, t.tagName, t.attributeName, t.meta], color: "var(--link)" },
+  { tag: [t.string, t.regexp, t.quote], color: "var(--fg-secondary)" },
+  { tag: [t.comment, t.processingInstruction, t.contentSeparator, t.punctuation], color: "var(--fg-secondary)" },
+  { tag: t.invalid, color: "var(--danger)" },
+]);
 
 const markdownHighlight = HighlightStyle.define([
   {
@@ -655,12 +669,13 @@ export class MarkdownEditor {
   readonly view: EditorView;
   private readonly options: EditorOptions;
   private settings: EditorSettings;
-  private languageExtension: Extension = markdownSupport();
+  private languageExtension: Extension = [];
   private languageGeneration = 0;
 
   constructor(options: EditorOptions, settings: EditorSettings) {
     this.options = options;
     this.settings = settings;
+    this.languageExtension = markdownSupport(settings.sourceMode);
     this.view = new EditorView({
       parent: options.parent,
       state: EditorState.create({ doc: options.doc, extensions: this.extensions() }),
@@ -831,7 +846,7 @@ export class MarkdownEditor {
     if (name === "" || name === "text" || name === "plain") {
       extension = [];
     } else if (name === "markdown" || name === "md") {
-      extension = markdownSupport();
+      extension = markdownSupport(this.settings.sourceMode);
     } else {
       const description =
         LanguageDescription.matchLanguageName(codeLanguages, name, false) ??

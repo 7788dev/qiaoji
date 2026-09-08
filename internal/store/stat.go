@@ -24,7 +24,14 @@ func (v *Vault) StatSubtree(path string) ([]FileStat, error) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	abs, err := filepath.Abs(path)
-	if err != nil || !v.contains(abs) {
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	if resolved, ok := resolveUserPath(v.root, abs, false); ok {
+		abs = resolved
+	} else if resolved, ok := resolveUserPath(v.root, abs, true); ok {
+		abs = resolved
+	} else {
 		return nil, ErrNotFound
 	}
 	info, err := os.Stat(abs)
@@ -67,7 +74,12 @@ func (v *Vault) StatSubtree(path string) ([]FileStat, error) {
 // key stored by the index.
 func (v *Vault) RelativeFolder(path string) (string, error) {
 	abs, err := filepath.Abs(path)
-	if err != nil || !v.contains(abs) {
+	if err != nil {
+		return "", ErrNotFound
+	}
+	if resolved, ok := resolveUserPath(v.root, abs, true); ok {
+		abs = resolved
+	} else {
 		return "", ErrNotFound
 	}
 	rel, err := filepath.Rel(v.root, abs)
@@ -87,7 +99,12 @@ func (v *Vault) FolderPathsUnder(path string) ([]string, error) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	abs, err := filepath.Abs(path)
-	if err != nil || !v.contains(abs) {
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	if resolved, ok := resolveUserPath(v.root, abs, true); ok {
+		abs = resolved
+	} else {
 		return nil, ErrNotFound
 	}
 	if info, err := os.Stat(abs); err != nil {

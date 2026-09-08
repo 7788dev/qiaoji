@@ -1,12 +1,30 @@
 export namespace config {
-	
+
+	export class DocumentState {
+	    path: string;
+	    mode: string;
+	    cursor: number;
+	    scrollTop: number;
+
+	    static createFrom(source: any = {}) {
+	        return new DocumentState(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.mode = source["mode"];
+	        this.cursor = source["cursor"];
+	        this.scrollTop = source["scrollTop"];
+	    }
+	}
 	export class WindowState {
 	    width: number;
 	    height: number;
 	    x: number;
 	    y: number;
 	    maximised: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new WindowState(source);
 	    }
@@ -21,6 +39,13 @@ export namespace config {
 	    }
 	}
 	export class Settings {
+	    experienceVersion: number;
+	    workspacePath: string;
+	    openDocuments: DocumentState[];
+	    activeDocument: string;
+	    trashRoots: string[];
+	    sidebarHidden: boolean;
+	    sidebarMode: string;
 	    vaultPath: string;
 	    theme: string;
 	    language: string;
@@ -47,13 +72,20 @@ export namespace config {
 	    exportDir: string;
 	    lastExportFormat: string;
 	    window: WindowState;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
 	    }
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.experienceVersion = source["experienceVersion"];
+	        this.workspacePath = source["workspacePath"];
+	        this.openDocuments = this.convertValues(source["openDocuments"], DocumentState);
+	        this.activeDocument = source["activeDocument"];
+	        this.trashRoots = source["trashRoots"];
+	        this.sidebarHidden = source["sidebarHidden"];
+	        this.sidebarMode = source["sidebarMode"];
 	        this.vaultPath = source["vaultPath"];
 	        this.theme = source["theme"];
 	        this.language = source["language"];
@@ -81,7 +113,7 @@ export namespace config {
 	        this.lastExportFormat = source["lastExportFormat"];
 	        this.window = this.convertValues(source["window"], WindowState);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -103,8 +135,120 @@ export namespace config {
 
 }
 
+export namespace document {
+
+	export class Document {
+	    id: string;
+	    path: string;
+	    name: string;
+	    content: string;
+	    revision: string;
+	    readOnly: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new Document(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.path = source["path"];
+	        this.name = source["name"];
+	        this.content = source["content"];
+	        this.revision = source["revision"];
+	        this.readOnly = source["readOnly"];
+	    }
+	}
+	export class Change {
+	    id: string;
+	    document?: Document;
+	    missing: boolean;
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Change(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.document = this.convertValues(source["document"], Document);
+	        this.missing = source["missing"];
+	        this.error = source["error"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Entry {
+	    name: string;
+	    path: string;
+	    directory: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new Entry(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.directory = source["directory"];
+	    }
+	}
+	export class DirectoryPage {
+	    entries: Entry[];
+	    nextCursor: string;
+
+	    static createFrom(source: any = {}) {
+	        return new DirectoryPage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.entries = this.convertValues(source["entries"], Entry);
+	        this.nextCursor = source["nextCursor"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+
+}
+
 export namespace exporter {
-	
+
 	export class Request {
 	    format: string;
 	    title: string;
@@ -113,7 +257,7 @@ export namespace exporter {
 	    markdown: string;
 	    bodyHtml: string;
 	    hasMath: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Request(source);
 	    }
@@ -133,7 +277,7 @@ export namespace exporter {
 }
 
 export namespace index {
-	
+
 	export class Hit {
 	    id: string;
 	    path: string;
@@ -144,11 +288,11 @@ export namespace index {
 	    // Go type: time
 	    updated: any;
 	    favorite: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Hit(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -160,7 +304,7 @@ export namespace index {
 	        this.updated = this.convertValues(source["updated"], null);
 	        this.favorite = source["favorite"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -184,11 +328,11 @@ export namespace index {
 	    value: string;
 	    sortBy: string;
 	    limit: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Query(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.scope = source["scope"];
@@ -235,11 +379,11 @@ export namespace main {
 	    tags: number;
 	    trash: number;
 	    bytes: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Stats(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.notes = source["notes"];
@@ -262,7 +406,7 @@ export namespace main {
 	    static createFrom(source: any = {}) {
 	        return new Bootstrap(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.settings = this.convertValues(source["settings"], config.Settings);
@@ -330,6 +474,57 @@ export namespace main {
 	        this.lastSyncChanged = source["lastSyncChanged"];
 	    }
 	}
+	export class DocumentTrashItem {
+	    id: string;
+	    kind: string;
+	    title: string;
+	    folder: string;
+	    excerpt: string;
+	    // Go type: time
+	    deletedAt: any;
+	    originalRel: string;
+	    size: number;
+	    notes: number;
+	    files: number;
+	    root: string;
+
+	    static createFrom(source: any = {}) {
+	        return new DocumentTrashItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.folder = source["folder"];
+	        this.excerpt = source["excerpt"];
+	        this.deletedAt = this.convertValues(source["deletedAt"], null);
+	        this.originalRel = source["originalRel"];
+	        this.size = source["size"];
+	        this.notes = source["notes"];
+	        this.files = source["files"];
+	        this.root = source["root"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 	export class NotePage {
 	    items: store.Meta[];
@@ -346,7 +541,7 @@ export namespace main {
 	        this.total = source["total"];
 	        this.nextCursor = source["nextCursor"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -389,18 +584,18 @@ export namespace main {
 	    folders: store.Folder[];
 	    tags: store.Tag[];
 	    stats: Stats;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SidebarData(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.folders = this.convertValues(source["folders"], store.Folder);
 	        this.tags = this.convertValues(source["tags"], store.Tag);
 	        this.stats = this.convertValues(source["stats"], Stats);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -419,7 +614,7 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
 	export class UpdateInfo {
 	    currentVersion: string;
 	    latestVersion: string;
@@ -427,11 +622,11 @@ export namespace main {
 	    releaseUrl: string;
 	    installerUrl: string;
 	    sha256: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new UpdateInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.currentVersion = source["currentVersion"];
@@ -446,16 +641,16 @@ export namespace main {
 }
 
 export namespace store {
-	
+
 	export class Folder {
 	    name: string;
 	    path: string;
 	    count: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Folder(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -478,11 +673,11 @@ export namespace store {
 	    words: number;
 	    size: number;
 	    revision: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Meta(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -498,7 +693,7 @@ export namespace store {
 	        this.size = source["size"];
 	        this.revision = source["revision"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -533,11 +728,11 @@ export namespace store {
 	    size: number;
 	    revision: string;
 	    content: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Note(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -554,7 +749,7 @@ export namespace store {
 	        this.revision = source["revision"];
 	        this.content = source["content"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -578,11 +773,11 @@ export namespace store {
 	    note: Note;
 	    folder: string;
 	    notes: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Restored(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
@@ -590,7 +785,7 @@ export namespace store {
 	        this.folder = source["folder"];
 	        this.notes = source["notes"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -612,11 +807,11 @@ export namespace store {
 	export class Tag {
 	    name: string;
 	    count: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Tag(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -635,11 +830,11 @@ export namespace store {
 	    size: number;
 	    notes: number;
 	    files: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TrashItem(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -653,7 +848,7 @@ export namespace store {
 	        this.notes = source["notes"];
 	        this.files = source["files"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;

@@ -72,6 +72,15 @@ describe("render", () => {
     expect(html).toContain("&lt;img");
   });
 
+  it("only permits the exact task-list checkbox markup", () => {
+    const task = render("- [x] 完成").html;
+    expect(task).toContain('<input class="md-task" type="checkbox" disabled checked>');
+
+    const forged = render('<input class="md-task" autofocus onfocus="alert(1)">').html;
+    expect(forged).not.toContain("<input");
+    expect(forged).toContain("&lt;input");
+  });
+
   it("routes relative note images through the validated vault asset endpoint", () => {
     const html = render("![截图](assets/screenshot.png)", "C:\\vault\\note.md").html;
     expect(html).toContain("/__qiaoji_asset?");

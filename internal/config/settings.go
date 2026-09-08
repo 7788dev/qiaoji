@@ -28,7 +28,14 @@ type WindowState struct {
 }
 
 type Settings struct {
-	VaultPath string `json:"vaultPath"`
+	ExperienceVersion int             `json:"experienceVersion"`
+	WorkspacePath     string          `json:"workspacePath"`
+	OpenDocuments     []DocumentState `json:"openDocuments"`
+	ActiveDocument    string          `json:"activeDocument"`
+	TrashRoots        []string        `json:"trashRoots"`
+	SidebarHidden     bool            `json:"sidebarHidden"`
+	SidebarMode       string          `json:"sidebarMode"`
+	VaultPath         string          `json:"vaultPath"`
 
 	// General
 	Theme          string `json:"theme"` // light | dark | system
@@ -73,7 +80,10 @@ func Defaults() Settings {
 	home, _ := os.UserHomeDir()
 	docs := filepath.Join(home, "Documents")
 	return Settings{
-		VaultPath: filepath.Join(docs, AppName),
+		VaultPath:         filepath.Join(docs, AppName),
+		ExperienceVersion: 2,
+		OpenDocuments:     []DocumentState{},
+		SidebarMode:       "files",
 
 		Theme:                "light",
 		Language:             "zh-CN",
@@ -85,11 +95,11 @@ func Defaults() Settings {
 		HardwareAcceleration: true,
 
 		FontFamily:      "system",
-		FontSize:        15,
-		LineHeight:      1.8,
+		FontSize:        16,
+		LineHeight:      1.75,
 		TabSize:         4,
 		ShowLineNumbers: false,
-		AutoSave:        true,
+		AutoSave:        false,
 		AutoSaveDelayMs: 800,
 		AutoPairing:     true,
 
@@ -97,7 +107,7 @@ func Defaults() Settings {
 		ListView:     "list",
 		SortBy:       "updated",
 		ShowLivePrev: true,
-		SidebarWidth: 208,
+		SidebarWidth: 240,
 		ListWidth:    292,
 
 		ExportDir:        docs,
@@ -149,12 +159,21 @@ func load(settingsPath string) (*Store, error) {
 	// Unmarshal over the defaults so newly added fields keep sane values when
 	// upgrading from an older settings file.
 	loaded := Defaults()
+	loaded.ExperienceVersion = 0
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		backup := fmt.Sprintf("%s.corrupt-%s", settingsPath, time.Now().Format("20060102-150405.000000000"))
 		if renameErr := os.Rename(settingsPath, backup); renameErr != nil {
 			return st, fmt.Errorf("设置文件损坏（%v），且无法备份原文件: %w", err, renameErr)
 		}
 		return st, fmt.Errorf("设置文件损坏，已备份到 %s: %w", backup, err)
+	}
+	if loaded.ExperienceVersion < 2 {
+		loaded.ExperienceVersion = 2
+		loaded.AutoSave = false
+		loaded.WorkspacePath = loaded.VaultPath
+		if loaded.SidebarWidth == 208 {
+			loaded.SidebarWidth = 240
+		}
 	}
 	st.s = loaded
 	st.s.normalise()
@@ -163,6 +182,26 @@ func load(settingsPath string) (*Store, error) {
 
 func (s *Settings) normalise() {
 	d := Defaults()
+	if s.SidebarMode != "outline" {
+		s.SidebarMode = "files"
+	}
+	if s.OpenDocuments == nil {
+		s.OpenDocuments = []DocumentState{}
+	}
+	if len(s.OpenDocuments) > 80 {
+		s.OpenDocuments = s.OpenDocuments[:80]
+	}
+	for i := range s.OpenDocuments {
+		if s.OpenDocuments[i].Mode != "source" {
+			s.OpenDocuments[i].Mode = "rich"
+		}
+		if s.OpenDocuments[i].Cursor < 0 {
+			s.OpenDocuments[i].Cursor = 0
+		}
+		if s.OpenDocuments[i].ScrollTop < 0 {
+			s.OpenDocuments[i].ScrollTop = 0
+		}
+	}
 	if s.Zoom < 50 || s.Zoom > 200 {
 		s.Zoom = d.Zoom
 	}
@@ -221,25 +260,54 @@ func (s *Settings) normalise() {
 func (st *Store) Get() Settings {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	return st.s
+	return cloneSettings(st.s)
+}
+
+func cloneSettings(s Settings) Settings {
+	s.OpenDocuments = append([]DocumentState{}, s.OpenDocuments...)
+	s.TrashRoots = append([]string{}, s.TrashRoots...)
+	return s
 }
 
 func (st *Store) Set(next Settings) error {
 	st.mu.Lock()
+	previous := cloneSettings(st.s)
+	next = cloneSettings(next)
 	next.normalise()
 	// The library path is owned by the vault lifecycle, not the settings form,
 	// so callers change it through SetVault instead.
 	next.VaultPath = st.s.VaultPath
+	next.WorkspacePath = st.s.WorkspacePath
+	next.OpenDocuments = st.s.OpenDocuments
+	next.ActiveDocument = st.s.ActiveDocument
+	next.TrashRoots = st.s.TrashRoots
+	next.Window = st.s.Window
 	st.s = next
 	st.mu.Unlock()
-	return st.Save()
+	if err := st.Save(); err != nil {
+		st.mu.Lock()
+		st.s = previous
+		st.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (st *Store) SetVault(p string) error {
 	st.mu.Lock()
+	previous := st.s.VaultPath
+	previousWorkspace := st.s.WorkspacePath
 	st.s.VaultPath = p
+	st.s.WorkspacePath = p
 	st.mu.Unlock()
-	return st.Save()
+	if err := st.Save(); err != nil {
+		st.mu.Lock()
+		st.s.VaultPath = previous
+		st.s.WorkspacePath = previousWorkspace
+		st.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (st *Store) SetWindow(w WindowState) {
@@ -252,10 +320,18 @@ func (st *Store) SetWindow(w WindowState) {
 // Patch applies a mutation under the write lock and persists the result.
 func (st *Store) Patch(fn func(*Settings)) error {
 	st.mu.Lock()
+	previous := cloneSettings(st.s)
 	fn(&st.s)
+	st.s = cloneSettings(st.s)
 	st.s.normalise()
 	st.mu.Unlock()
-	return st.Save()
+	if err := st.Save(); err != nil {
+		st.mu.Lock()
+		st.s = previous
+		st.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (st *Store) Save() error {

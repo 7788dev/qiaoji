@@ -228,7 +228,7 @@ func titleFromBody(body string) string {
 			continue
 		}
 		if strings.HasPrefix(t, "#") {
-			return strings.TrimSpace(strings.TrimLeft(t, "# "))
+			return firstRunes(strings.TrimSpace(strings.TrimLeft(t, "# ")), maxTitleRunes)
 		}
 		return firstRunes(t, 60)
 	}

@@ -23,6 +23,18 @@ func TestFindBrowserEmptyCandidates(t *testing.T) {
 	}
 }
 
+func TestFileURLEscapesSpecialPathCharacters(t *testing.T) {
+	got := fileURL(`C:\vault\a #b?c%中文.html`)
+	for _, want := range []string{"%20", "%23", "%3F", "%25"} {
+		if !strings.Contains(strings.ToUpper(got), want) {
+			t.Errorf("fileURL(%q) = %q, missing %s", got, got, want)
+		}
+	}
+	if strings.Contains(got, "中文") {
+		t.Errorf("fileURL left Unicode unescaped: %q", got)
+	}
+}
+
 func TestWritePDFUsesInAppEngineFirst(t *testing.T) {
 	dir := t.TempDir()
 	origPDF := htmlToPDF

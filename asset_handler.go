@@ -7,6 +7,10 @@ import (
 )
 
 func (a *App) serveVaultAsset(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/__qiaoji_document_asset" {
+		a.serveDocumentAsset(w, r)
+		return
+	}
 	if r.URL.Path != "/__qiaoji_asset" {
 		http.NotFound(w, r)
 		return
@@ -50,6 +54,41 @@ func (a *App) serveVaultAsset(w http.ResponseWriter, r *http.Request) {
 		a.markSelfPath(filepath.Dir(notePath), true)
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]string{"path": relative})
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *App) serveDocumentAsset(w http.ResponseWriter, r *http.Request) {
+	if a.documents == nil {
+		http.NotFound(w, r)
+		return
+	}
+	id := r.URL.Query().Get("id")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, no-store")
+	switch r.Method {
+	case http.MethodGet:
+		data, mime, err := a.documents.Asset(id, r.URL.Query().Get("path"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", mime)
+		_, _ = w.Write(data)
+	case http.MethodPost:
+		r.Body = http.MaxBytesReader(w, r.Body, 25<<20+1)
+		defer r.Body.Close()
+		path, err := a.documents.StageAsset(id, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"path": path})
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

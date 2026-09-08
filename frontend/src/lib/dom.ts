@@ -146,6 +146,29 @@ export function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/** Render only the backend's `<mark>` highlight tags; discard all other DOM. */
+export function setSafeHighlight(node: HTMLElement, html: string | undefined, text: string): void {
+  if (!html) {
+    node.textContent = text;
+    return;
+  }
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const out = document.createDocumentFragment();
+  for (const child of Array.from(template.content.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      out.appendChild(child.cloneNode(true));
+    } else if (child.nodeType === Node.ELEMENT_NODE && (child as Element).tagName === "MARK") {
+      const mark = document.createElement("mark");
+      mark.textContent = child.textContent ?? "";
+      out.appendChild(mark);
+    } else {
+      out.appendChild(document.createTextNode(child.textContent ?? ""));
+    }
+  }
+  node.replaceChildren(out);
+}
+
 /** Trailing-edge debounce. */
 export function debounce<A extends unknown[]>(
   fn: (...args: A) => void,

@@ -55,6 +55,26 @@ func TestConcurrentSaveAlwaysProducesValidJSON(t *testing.T) {
 	}
 }
 
+func TestDocumentRestoreSettingsAreIndependentSnapshots(t *testing.T) {
+	t.Parallel()
+	st := &Store{path: filepath.Join(t.TempDir(), "settings.json"), s: Defaults()}
+	entries := []DocumentState{{Path: "中文.md", Mode: "rich", Cursor: 10}}
+	if err := st.Patch(func(s *Settings) {
+		s.OpenDocuments = entries
+		s.TrashRoots = []string{"回收目录"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entries[0].Path = "caller mutation.md"
+	snapshot := st.Get()
+	snapshot.OpenDocuments[0].Cursor = 500
+	snapshot.TrashRoots[0] = "changed"
+	current := st.Get()
+	if current.OpenDocuments[0].Path != "中文.md" || current.OpenDocuments[0].Cursor != 10 || current.TrashRoots[0] != "回收目录" {
+		t.Fatal("an independently read settings snapshot changed persisted session state")
+	}
+}
+
 func TestLoadBacksUpCorruptSettings(t *testing.T) {
 	t.Parallel()
 
@@ -103,11 +123,37 @@ func TestLoadOldSettingsAddsPersistedPanelWidths(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := st.Get()
-	if got.SidebarWidth != 208 || got.ListWidth != 292 {
-		t.Fatalf("panel widths = %d/%d, want 208/292", got.SidebarWidth, got.ListWidth)
+	if got.SidebarWidth != 240 || got.ListWidth != 292 {
+		t.Fatalf("panel widths = %d/%d, want 240/292", got.SidebarWidth, got.ListWidth)
 	}
 	if got.Theme != "dark" || got.VaultPath != `C:\notes` {
 		t.Fatalf("old settings were not preserved: %+v", got)
+	}
+}
+
+func TestWritingExperienceMigratesManualSaveOnlyOnce(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"vaultPath":"C:\\notes","autoSave":true,"fontSize":19,"theme":"dark"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := st.Get()
+	if got.AutoSave || got.ExperienceVersion != 2 || got.WorkspacePath != `C:\notes` || got.FontSize != 19 || got.Theme != "dark" {
+		t.Fatalf("migration = %+v", got)
+	}
+	if err := st.Patch(func(s *Settings) { s.AutoSave = true }); err != nil {
+		t.Fatal(err)
+	}
+	again, err := load(path)
+	if err != nil || !again.Get().AutoSave {
+		t.Fatal("explicit autosave preference was reset on next launch")
+	}
+	if Defaults().WorkspacePath != "" || Defaults().AutoSave {
+		t.Fatal("fresh defaults must not initialise a folder or auto-save")
 	}
 }
 

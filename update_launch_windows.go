@@ -27,7 +27,11 @@ if (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {
   Remove-Item -LiteralPath $setup -Force -ErrorAction SilentlyContinue
   exit 1
 }
-cmd.exe /C ('"{0}" /S /D={1}' -f $setup, $dir) | Out-Null
+$install = Start-Process -FilePath $setup -ArgumentList @('/S', ('/D=' + $dir)) -Wait -PassThru -WindowStyle Hidden
+if ($install.ExitCode -ne 0) {
+  Remove-Item -LiteralPath $setup -Force -ErrorAction SilentlyContinue
+  exit $install.ExitCode
+}
 if (Test-Path -LiteralPath $exe) {
   Start-Process -FilePath $exe
 }
@@ -39,8 +43,7 @@ Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction Silent
 		return errors.New("无法准备安装脚本")
 	}
 
-	cmd := exec.Command("cmd.exe", "/C", "start", "", "/MIN", "powershell.exe",
-		"-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", script)
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err := cmd.Start(); err != nil {
 		_ = os.Remove(script)

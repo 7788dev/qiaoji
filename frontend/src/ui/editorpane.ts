@@ -23,6 +23,7 @@ import { notify, reportError } from "./toast";
 
 export interface EditorPaneHandlers {
   onCursor: (line: number, column: number, selected: number) => void;
+  onLocalLink?: (href: string, notePath: string) => void;
 }
 
 export interface EditorPane {
@@ -325,6 +326,11 @@ export function createEditorPane(handlers: EditorPaneHandlers): EditorPane {
         behavior: "smooth",
         block: "start",
       });
+      return;
+    }
+    const local = target.dataset.local;
+    if (local && handlers.onLocalLink) {
+      handlers.onLocalLink(local, activeTab()?.path ?? "");
     }
   });
 

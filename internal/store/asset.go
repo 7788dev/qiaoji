@@ -36,13 +36,14 @@ func (v *Vault) SaveAssetReader(notePath, filename string, src io.Reader) (strin
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	if !v.contains(notePath) || !isMarkdown(filepath.Base(notePath)) {
+	if !isMarkdown(filepath.Base(notePath)) {
 		return "", ErrNotFound
 	}
-	resolvedNote, ok := resolvedWithin(v.root, notePath)
+	resolvedNote, ok := resolveUserPath(v.root, notePath, false)
 	if !ok {
 		return "", ErrNotFound
 	}
+	notePath = resolvedNote
 	if info, err := os.Stat(resolvedNote); err != nil || info.IsDir() {
 		if err != nil {
 			return "", err
@@ -71,13 +72,15 @@ func (v *Vault) SaveAssetReader(notePath, filename string, src io.Reader) (strin
 	}
 
 	dir := filepath.Join(filepath.Dir(notePath), "assets")
-	if !v.contains(dir) {
+	resolvedDir, ok := resolveUserPath(v.root, dir, true)
+	if !ok {
 		return "", errors.New("附件目录不在笔记库内")
 	}
+	dir = resolvedDir
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	if _, ok := resolvedWithin(v.root, dir); !ok {
+	if _, ok := resolveUserPath(v.root, dir, false); !ok {
 		return "", errors.New("附件目录不在笔记库内")
 	}
 	target := uniqueAssetPath(dir, base, ext)
@@ -124,13 +127,15 @@ func (v *Vault) ResolveAsset(notePath, relative string) (string, error) {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 
-	if !v.contains(notePath) || !isMarkdown(filepath.Base(notePath)) {
+	if !isMarkdown(filepath.Base(notePath)) {
 		return "", ErrNotFound
 	}
-	if resolvedNote, ok := resolvedWithin(v.root, notePath); !ok {
+	if resolvedNote, ok := resolveUserPath(v.root, notePath, false); !ok {
 		return "", ErrNotFound
 	} else if info, err := os.Stat(resolvedNote); err != nil || info.IsDir() {
 		return "", ErrNotFound
+	} else {
+		notePath = resolvedNote
 	}
 	if relative == "" || filepath.IsAbs(relative) {
 		return "", ErrNotFound
@@ -143,7 +148,7 @@ func (v *Vault) ResolveAsset(notePath, relative string) (string, error) {
 		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", ErrNotFound
 	}
-	if !v.contains(target) {
+	if _, ok := resolveUserPath(v.root, target, false); !ok {
 		return "", ErrNotFound
 	}
 	resolvedAssets, ok := resolvedWithin(v.root, assetsRoot)
@@ -179,17 +184,5 @@ func uniqueAssetPath(dir, base, ext string) string {
 // assets symlink from turning the local image endpoint into an arbitrary-file
 // reader.
 func resolvedWithin(root, target string) (string, bool) {
-	resolvedRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", false
-	}
-	resolvedTarget, err := filepath.EvalSymlinks(target)
-	if err != nil {
-		return "", false
-	}
-	rel, err := filepath.Rel(resolvedRoot, resolvedTarget)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", false
-	}
-	return resolvedTarget, true
+	return resolveUserPath(root, target, false)
 }

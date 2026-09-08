@@ -1,6 +1,6 @@
 module qiaoji
 
-go 1.25.0
+go 1.25.13
 
 require (
 	fyne.io/systray v1.12.2

@@ -19,6 +19,7 @@ output/
 # Agent / debug dumps
 debug-*.log
 *.log
+*.test.exe
 
 # Editor and OS noise
 .vscode/
